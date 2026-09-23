@@ -769,35 +769,18 @@ function buildThreadLinkMessages(guild, scan) {
 
 
 function parseRange(value) {
-  // Round 512 ใช้เลขคู่ Unified 1-256 โดยตรง
-  // รองรับทั้ง hyphen ปกติและ dash ที่อาจติดมาจากการ copy/paste
-  const raw = String(value || '')
-    .trim()
-    .replace(/[–—−]/g, '-');
-
+  const raw = String(value || '').trim();
   const match = raw.match(/^(\d+)\s*-\s*(\d+)$/);
-  if (!match) {
-    throw new Error(
-      'รูปแบบเรนจ์ไม่ถูกต้อง\n' +
-      'กรุณากำหนดเรนจ์ เช่น `1-32` หรือ `87-107`\n' +
-      'หากต้องการสร้างเพียง 1 คู่ ให้ใส่ `1-1` หรือ `32-32`'
-    );
-  }
-
-  const start = Number(match[1]);
-  const end = Number(match[2]);
-
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > 256) {
-    throw new Error('เรนจ์ไม่ถูกต้อง: Round 512 ใช้เลขคู่ตั้งแต่ 1-256');
-  }
-
+  if (!match) throw new Error('รูปแบบเรนจ์ไม่ถูกต้อง\nกรุณากำหนดเรนจ์ เช่น `1-32`\nหากต้องการสร้างเพียง 1 คู่ ให้ใส่ `1-1` หรือ `32-32`');
+  const start = Number(match[1]); const end = Number(match[2]);
+  if (start < 1 || end < start || end - start + 1 > 256) throw new Error('เรนจ์ไม่ถูกต้อง: จุดเริ่มต้องไม่น้อยกว่า 1 และช่วงต้องไม่เกิน 256 คู่');
   return [start, end];
 }
 function rangeModal(customId, title) {
   const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
   modal.addComponents(
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('round').setLabel('รอบ เช่น 512').setStyle(TextInputStyle.Short).setValue('512').setRequired(true)),
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('range').setLabel('เรนจ์ เช่น 1-32, 87-107 หรือ 1-1').setStyle(TextInputStyle.Short).setPlaceholder('เช่น 87-107 = คู่ 87 ถึง 107 | 1-1 = คู่เดียว').setRequired(true))
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('range').setLabel('เรนจ์ เช่น 1-32 หรือ 1-1').setStyle(TextInputStyle.Short).setPlaceholder('1-32 = คู่ 1 ถึง 32 | 1-1 = คู่เดียว').setRequired(true))
   );
   return modal;
 }

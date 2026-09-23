@@ -1,11 +1,3 @@
-# v3.3.4 — Unified Round 512 Range Fix
-
-- Range input now accepts normal pair ranges such as `87-107`.
-- Supports `1-1`, `32-32`, `87-107`, etc.
-- Round 512 range is validated as `1-256`.
-- Accepts normal hyphen and copied en/em/minus dashes.
-- No A/B selector is used for range input.
-
 # RoV CSV Pipeline Discord Bot — v3.2
 
 This build is the CSV-first pipeline agreed for the RoV tournament. It uses **Challonge A only** and does **not** call the Challonge API.
