@@ -24,7 +24,7 @@ const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
-const BUILD_ID = 'v3.3.6-R512-UNIFIED-RANGE';
+const BUILD_ID = 'v3.3.7-R512-THREAD-RESOLVE';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -650,14 +650,65 @@ function resultSummary(results, title) {
 async function inspectAnnouncementRange(guild, round, start, end) {
   const rows = getMatches(round, start, end);
   if (!rows.length) throw new Error(`ไม่พบคู่ใน Round ${round}, Range ${start}-${end}`);
+
   const found = [], missing = [];
+  const parentId = MATCH_THREAD_PARENT_ID;
+  const parent = await getChannel(guild, parentId).catch(() => null);
+
+  // Announcement must detect Threads that already exist in Discord even when
+  // the DB mapping is missing (e.g. bot restarted without persistent DB,
+  // mapping was created by an older build, or the thread was created manually).
+  // Build one normalized name index from the actual parent channel.
+  const actualThreads = new Map();
+  if (parent?.threads) {
+    const active = await parent.threads.fetchActive().catch(() => null);
+    if (active?.threads) {
+      for (const t of active.threads.values()) actualThreads.set(threadFindKey(t.name), t);
+    }
+    let before;
+    for (let page = 0; page < 20; page++) {
+      const archived = await parent.threads.fetchArchived({
+        type: 'public',
+        limit: 100,
+        ...(before ? { before } : {}),
+      }).catch(() => null);
+      if (!archived?.threads?.size) break;
+      for (const t of archived.threads.values()) actualThreads.set(threadFindKey(t.name), t);
+      const last = archived.threads.last();
+      if (!last || archived.threads.size < 100) break;
+      before = last.id;
+    }
+  }
+
   for (const match of rows) {
     const key = matchKey(match.round, match.pair);
     const mapping = db.matches[key] || {};
-    const thread = mapping.threadId ? await guild.channels.fetch(mapping.threadId).catch(() => null) : null;
-    if (thread?.isThread?.()) found.push({ match, mapping, thread });
-    else missing.push(match);
+    let thread = mapping.threadId
+      ? await guild.channels.fetch(mapping.threadId).catch(() => null)
+      : null;
+
+    // DB miss/stale mapping -> resolve from the actual Discord Thread name.
+    if (!thread?.isThread?.()) {
+      thread = actualThreads.get(threadFindKey(threadName(match))) || null;
+    }
+
+    if (thread?.isThread?.()) {
+      // Repair the mapping so future announcement/status operations can find it directly.
+      db.matches[key] = {
+        ...mapping,
+        round: String(match.round),
+        pair: Number(match.pair),
+        team1: match.team1,
+        team2: match.team2,
+        threadId: thread.id,
+        threadParentId: thread.parentId,
+      };
+      found.push({ match, mapping: db.matches[key], thread });
+    } else {
+      missing.push(match);
+    }
   }
+  saveDb();
   return { rows, found, missing };
 }
 function announcementPreviewText(round, start, end, report, channelId) {
