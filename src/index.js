@@ -24,7 +24,7 @@ const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
-const BUILD_ID = 'v3.3.11-R512-ROSTER-FLEX';
+const BUILD_ID = 'v3.3.12-R512-LINK-MATCH-BLOCKS';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -813,7 +813,9 @@ async function fetchThreadsFromSourceRoom(parent) {
 }
 function parseStrictThreadName(name) {
   const raw = String(name || '').trim();
-  const parts = raw.split(' vs ');
+  // Match Thread names are allowed to use VS / vs / Vs / vS.
+  // Keep the original team names exactly as displayed.
+  const parts = raw.split(/\s+vs\s+/i);
   if (parts.length !== 2) return null;
   const team1 = parts[0].trim(), team2 = parts[1].trim();
   if (!team1 || !team2) return null;
@@ -846,25 +848,58 @@ async function scanThreadLinks(guild, sourceChannelId) {
   return { source, results };
 }
 function buildThreadLinkMessages(guild, scan) {
-  const blocks = [`🔗 **Link Threads**`, `Source Room: <#${scan.source.id}>`, `ตรวจพบ Threads: **${scan.results.length}**`, '', 'กติกาชื่อ Thread: `XXX vs XXX` เท่านั้น'];
+  const blocks = [
+    `🔗 **Link Match**`,
+    `Source Room: <#${scan.source.id}>`,
+    `ตรวจพบ Threads: **${scan.results.length}**`,
+    '',
+    'กติกาชื่อ Thread: `XXX VS XXX` หรือ `XXX vs XXX`',
+  ];
+
   for (const r of scan.results) {
     if (r.status === 'invalid_thread') {
-      blocks.push(`⚠️ **Thread Format ไม่ถูกต้อง**\nชื่อ: ${r.thread.name}\nthread : ${mentionChannel(r.thread.id)}`);
+      blocks.push([
+        '━━━━━━━━━━━━━━━━━━━━',
+        '⚠️ **Thread Format ไม่ถูกต้อง**',
+        `ชื่อ: ${r.thread.name}`,
+        `thread : ${mentionChannel(r.thread.id)}`,
+      ].join('\n'));
       continue;
     }
+
     if (r.status === 'duplicate_thread') {
-      blocks.push(`⚠️ **พบ Thread ซ้ำ**\n${r.team1} vs ${r.team2}`);
-      for (const t of r.threads) blocks.push(`thread : ${mentionChannel(t.id)}`);
+      const lines = [
+        '━━━━━━━━━━━━━━━━━━━━',
+        `⚠️ **พบ Thread ซ้ำ**`,
+        `⚔️ ${r.team1} VS ${r.team2}`,
+      ];
+      for (const t of r.threads) lines.push(`🧵 Thread : ${mentionChannel(t.id)}`);
+      blocks.push(lines.join('\n'));
       continue;
     }
-    const lines = [`${r.team1} vs ${r.team2}`, `thread : ${mentionChannel(r.thread.id)}`];
+
+    // One complete block per match, separated by a divider so each pair
+    // can be copied/read independently. Each team gets its own VC line.
+    const lines = [
+      '━━━━━━━━━━━━━━━━━━━━',
+      `⚔️ **${r.team1} VS ${r.team2}**`,
+      `🧵 Thread : ${mentionChannel(r.thread.id)}`,
+    ];
+
     for (const v of r.vcResults) {
-      if (v.candidates.length === 0) lines.push(`VC ${v.team} : ❌ ไม่พบ`);
-      else if (v.candidates.length === 1) lines.push(`VC ${v.team} : ${mentionChannel(v.candidates[0].id)}`);
-      else { lines.push(`VC ${v.team} : ⚠️ พบ ${v.candidates.length} ห้อง`); for (const c of v.candidates) lines.push(`• ${c.name} : ${mentionChannel(c.id)}`); }
+      if (v.candidates.length === 0) {
+        lines.push(`🔊 **${v.team}** : ❌ ไม่พบ VC`);
+      } else if (v.candidates.length === 1) {
+        lines.push(`🔊 **${v.team}** : ${mentionChannel(v.candidates[0].id)}`);
+      } else {
+        lines.push(`🔊 **${v.team}** : ⚠️ พบ ${v.candidates.length} ห้อง`);
+        for (const c of v.candidates) lines.push(`  • ${c.name} : ${mentionChannel(c.id)}`);
+      }
     }
+
     blocks.push(lines.join('\n'));
   }
+
   return splitDiscordText(blocks, 1900);
 }
 
