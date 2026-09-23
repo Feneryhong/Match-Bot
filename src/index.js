@@ -22,8 +22,8 @@ const STAFF_BOARD_CHANNEL_ID = env.STAFF_BOARD_CHANNEL_ID || '';
 const DB_PATH = env.DB_PATH || '/data/rov-csv-bot.json';
 const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 'round512.csv');
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
-const CATEGORY_PREFIX = env.CATEGORY_PREFIX || env.CATEGORY_PREFIX_A || 'R512';
-const TOURNAMENT_NAME = env.TOURNAMENT_NAME || env.TOURNAMENT_A_NAME || 'Miss RoV Tournament Season 2 — Round 512';
+const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
+const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -769,18 +769,35 @@ function buildThreadLinkMessages(guild, scan) {
 
 
 function parseRange(value) {
-  const raw = String(value || '').trim();
+  // Round 512 ใช้เลขคู่ Unified 1-256 โดยตรง
+  // รองรับทั้ง hyphen ปกติและ dash ที่อาจติดมาจากการ copy/paste
+  const raw = String(value || '')
+    .trim()
+    .replace(/[–—−]/g, '-');
+
   const match = raw.match(/^(\d+)\s*-\s*(\d+)$/);
-  if (!match) throw new Error('รูปแบบเรนจ์ไม่ถูกต้อง\nกรุณากำหนดเรนจ์ เช่น `1-32`\nหากต้องการสร้างเพียง 1 คู่ ให้ใส่ `1-1` หรือ `32-32`');
-  const start = Number(match[1]); const end = Number(match[2]);
-  if (start < 1 || end < start || end > 256) throw new Error('เรนจ์ไม่ถูกต้อง: คู่ต้องอยู่ในช่วง 1-256 และจุดเริ่มต้องไม่น้อยกว่าจุดจบ');
+  if (!match) {
+    throw new Error(
+      'รูปแบบเรนจ์ไม่ถูกต้อง\n' +
+      'กรุณากำหนดเรนจ์ เช่น `1-32` หรือ `87-107`\n' +
+      'หากต้องการสร้างเพียง 1 คู่ ให้ใส่ `1-1` หรือ `32-32`'
+    );
+  }
+
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > 256) {
+    throw new Error('เรนจ์ไม่ถูกต้อง: Round 512 ใช้เลขคู่ตั้งแต่ 1-256');
+  }
+
   return [start, end];
 }
 function rangeModal(customId, title) {
   const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
   modal.addComponents(
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('round').setLabel('รอบ เช่น 512').setStyle(TextInputStyle.Short).setValue('512').setRequired(true)),
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('range').setLabel('เรนจ์ เช่น 1-32 หรือ 1-1').setStyle(TextInputStyle.Short).setPlaceholder('1-32 = คู่ 1 ถึง 32 | 1-1 = คู่เดียว').setRequired(true))
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('range').setLabel('เรนจ์ เช่น 1-32, 87-107 หรือ 1-1').setStyle(TextInputStyle.Short).setPlaceholder('เช่น 87-107 = คู่ 87 ถึง 107 | 1-1 = คู่เดียว').setRequired(true))
   );
   return modal;
 }
@@ -788,7 +805,7 @@ function batchModal() { return rangeModal('batch_modal', 'สร้าง Match 
 
 function panel() {
   return {
-    content: `🏆 **RoV Tournament CSV Pipeline — ${TOURNAMENT_NAME}**\n\n**Source:** CSV — Round 512 รวมคู่ **1-256**\n**A/B:** ไม่มี selector\n**Challonge API:** ปิด\n**Roster:** <#${ROSTER_CHANNEL_ID}> (ใช้ข้อความล่าสุดของแต่ละทีมเท่านั้น)\n**Announcement:** เลือกห้องทุกครั้งที่กดประกาศ
+    content: `🏆 **RoV Tournament CSV Pipeline — ${TOURNAMENT_NAME}**\n\n**Source:** CSV\n**Challonge API:** ปิด\n**Roster:** <#${ROSTER_CHANNEL_ID}> (ใช้ข้อความล่าสุดของแต่ละทีมเท่านั้น)\n**Announcement:** เลือกห้องทุกครั้งที่กดประกาศ
 **ผู้มีสิทธิ์:** ${ALLOWED_USER_IDS.length ? ALLOWED_USER_IDS.map(id => `<@${id}>`).join(', ') : 'ยังไม่ได้กำหนด'}`,
     components: [
       new ActionRowBuilder().addComponents(
@@ -836,7 +853,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
       const denied = staffGuard(interaction); if (denied) return publicDenied(interaction, denied);
       if (interaction.customId === 'refresh') return interaction.update(panel());
-      if (interaction.customId === 'status') return interaction.reply({ content: `📊 Round 512 CSV: **${readCsv(MATCH_CSV_PATH).length} คู่**\nช่วงคู่ที่รองรับ: **1-256**\nDB: **${Object.keys(db.matches).length} mappings**\nOpen ID: **${openIds.size} ทีม**\nRoster: <#${ROSTER_CHANNEL_ID}>\nสิทธิ์ User ID: **${ALLOWED_USER_IDS.length} คน**\nChallonge API: **ปิด**` });
+      if (interaction.customId === 'status') return interaction.reply({ content: `📊 CSV: **${readCsv(MATCH_CSV_PATH).length} คู่**\nDB: **${Object.keys(db.matches).length} mappings**\nOpen ID: **${openIds.size} ทีม**\nRoster: <#${ROSTER_CHANNEL_ID}>\nสิทธิ์ User ID: **${ALLOWED_USER_IDS.length} คน**\nChallonge API: **ปิด**` });
       if (interaction.customId === 'batch') return interaction.showModal(batchModal());
       if (interaction.customId === 'threads_only') return interaction.showModal(rangeModal('threads_modal', 'สร้างเฉพาะ Match Threads'));
       if (interaction.customId === 'vc_only') return interaction.showModal(rangeModal('vc_modal', 'สร้างเฉพาะ Team VC'));

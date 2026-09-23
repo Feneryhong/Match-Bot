@@ -1,6 +1,14 @@
-# RoV CSV Pipeline Discord Bot — v3.4
+# v3.3.4 — Unified Round 512 Range Fix
 
-This build is the CSV-first pipeline for **Round 512 แบบรวมสายเดียว 1-256**. ไม่มีตัวเลือก A/B และไม่เรียก Challonge API.
+- Range input now accepts normal pair ranges such as `87-107`.
+- Supports `1-1`, `32-32`, `87-107`, etc.
+- Round 512 range is validated as `1-256`.
+- Accepts normal hyphen and copied en/em/minus dashes.
+- No A/B selector is used for range input.
+
+# RoV CSV Pipeline Discord Bot — v3.2
+
+This build is the CSV-first pipeline agreed for the RoV tournament. It uses **Challonge A only** and does **not** call the Challonge API.
 
 ## Source of truth
 
@@ -24,10 +32,9 @@ For compatibility, `team_a/team_b` are also accepted. `challonge_match_id` is ba
 
 ## Current tournament
 
-- Round 512 unified bracket: **คู่ 1-256**
-- Source: **A24 + B24** โดยรวมเป็น Pair เดียวต่อเนื่อง
+- Challonge A only
+- Tournament URL: `https://challonge.com/1gv5vasi`
 - CSV: `data/round512.csv`
-- ตารางเวลา CSV: คู่ 1-64 = 19:00, 65-128 = 20:00, 129-192 = 21:00, 193-256 = 22:00
 - Open ID: `data/approved-teams-openid-cleaned.csv`
 
 ## Panel
@@ -69,7 +76,7 @@ Creates/repairs:
 5. VC links inside the Thread
 6. Open ID data inside the Thread
 7. Staff Board entry
-8. Staff Board entry
+8. Grouped announcement by match time
 
 ### Thread-only
 
@@ -178,11 +185,11 @@ Announcement is a separate operation. Each time Staff presses `📢 ประก
 
 Announcements are grouped by the CSV match time (for example 19:00, 20:00, 21:00, 22:00) and include existing Match Thread links. If a requested pair has no resolvable Thread, it is reported and skipped rather than created.
 
-Batch **ไม่ประกาศอัตโนมัติ**. ใช้ `📢 ประกาศ Match Threads` แยกต่างหากเพื่อ Preview และยืนยันก่อนส่ง
+Batch still uses the same announcement logic, but asks for the announcement channel as the final channel selection.
 
 ## Thread Link Generator
 
-`🔗 สร้าง Link Match` is read-only. มันสแกน Match Threads ที่มีอยู่ใน Source Room ตามชื่อ `XXX vs XXX` และหา VC ของทั้งสองทีมจาก Discord โดยไม่สร้าง/แก้ไข/ลบอะไร It outputs clickable Discord links.
+`🔗 สร้าง Link Match` is read-only. It scans existing Discord private Team VCs whose names follow `#คู่ ชื่อทีม` (with `#2/#3` suffixes tolerated), groups them by pair number, derives `TEAM 1 VS TEAM 2`, and searches existing public Match Threads for that exact name in either order. It outputs clickable Discord links.
 
 It does not create, edit, or delete anything. Duplicate VC/team cases and duplicate Threads are reported instead of guessing.
 
@@ -304,24 +311,33 @@ Finally test:
 Check Category, both VC permissions, Thread, VC links, Open ID, Staff Board, and Announcement before expanding the range.
 
 
-## v3.4 changes
+## v3.3 changes
 
-- ใช้ CSV Round 512 แบบรวมสายเดียว **Pair 1-256**
-- ไม่มี A/B selector อีกต่อไป
-- สร้าง `data/round512.csv` จาก A24(1).svg + B24(1).svg โดยใช้ Match Groups ของรอบ 512 เรียงบนลงล่าง
-- Pair 1-128 = A24 และ Pair 129-256 = B24
-- เวลาใน CSV แบ่ง 64 คู่ต่อช่วง: 19:00 / 20:00 / 21:00 / 22:00
-- Range รองรับสูงสุด `1-256`
-- Panel/response เป็น public และตรวจสิทธิ์ด้วย `ALLOWED_USER_IDS`
-- Link Match เป็น Source → Destination แบบอ่านอย่างเดียว และไม่พึ่ง pending timeout
-- Announcement เป็นงานแยก ต้อง Preview/Confirm ก่อนส่ง
-- Challonge API ไม่ถูกเรียก
+- Panel and operational responses are public (not ephemeral).
+- Panel access is controlled by `ALLOWED_USER_IDS` (Discord User IDs), checked on every interaction.
+- `📢 ประกาศ Match Threads` now previews missing Threads and requires confirmation; only existing Threads are announced.
+- `🔗 สร้าง Link Match` first selects a Source Room, scans only Threads that exist there, then selects a Destination Room.
+- Link Thread parser accepts only the exact visible format `XXX vs XXX` using lowercase `vs` with one separator. Invalid names are reported and never guessed. Duplicate matching Threads are reported and not auto-selected.
+- Thread link output includes Thread link and VC links for both teams; missing or multiple VCs are explicitly reported.
+- No Challonge API is used.
 
-## Railway update
+### Railway deploy/update
 
-1. แทนที่ไฟล์ใน GitHub/Railway ด้วยโปรเจกต์นี้
-2. ใช้ `npm start`
-3. ตั้งค่าอย่างน้อย `DISCORD_TOKEN`, `CLIENT_ID`, `GUILD_ID`, `ROSTER_CHANNEL_ID`, `ALLOWED_USER_IDS`
-4. ให้ `MATCH_CSV_PATH=./data/round512.csv`, `OPENID_CSV_PATH=./data/approved-teams-openid-cleaned.csv`, `DB_PATH=/data/rov-csv-bot.json`
-5. ถ้าใช้ DB `/data` ให้คง Railway Volume ที่ mount `/data`
-6. ทดสอบ `1-1` ก่อน แล้วค่อยขยายเป็น `1-32`, `1-64` และช่วงใหญ่ขึ้น
+1. Replace the project files with this version and push to the GitHub repository connected to Railway.
+2. Keep the existing Railway service and existing Volume mounted at `/data`.
+3. In Railway Variables set: `DISCORD_TOKEN`, `CLIENT_ID`, `GUILD_ID`, `ROSTER_CHANNEL_ID`, and `ALLOWED_USER_IDS`.
+4. Keep `MATCH_CSV_PATH=./data/round512.csv`, `OPENID_CSV_PATH=./data/approved-teams-openid-cleaned.csv`, and `DB_PATH=/data/rov-csv-bot.json` unless your deployment uses different paths.
+5. `ALLOWED_ROLE_IDS` is no longer used. Remove it if present.
+6. Commit/push. Railway will redeploy with `npm start`.
+7. After deploy, run `/panel` in the configured Staff channel (if `STAFF_CHANNEL_ID` is set). Everyone can see the Panel, but only listed User IDs can operate it.
+
+Recommended Discord permissions: View Channels, Send Messages, Read Message History, Use Application Commands, Manage Channels, Create Public Threads, Send Messages in Threads, Manage Threads, Manage Messages, Mention Everyone. Enable Message Content Intent.
+
+Test in this order: `VC Audit 1-1` → `VC-only 1-1` → `Thread-only 1-1` → `Batch 1-1` → Announcement preview/confirm → Link Threads source/destination → expand to `1-5` → then larger ranges.
+
+
+## v3.3.1 Link Match fix
+- The Panel button is `🔗 สร้าง Link Match`.
+- The Source → Destination flow no longer depends on an in-memory 10-minute pending state.
+- The destination select stores the Source Room ID in its custom ID and rescans the Source when sending, so the flow does not show the old “รายการหมดอายุแล้ว” message just because the pending map expired or the bot restarted between steps.
+- The old `thread_links` custom ID is still accepted for compatibility with an already-posted Panel message.
