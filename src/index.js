@@ -797,7 +797,7 @@ function panel() {
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('audit_vc').setLabel('🔍 ตรวจสอบ Team VC').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('thread_links').setLabel('🔗 สร้าง Link Threads ทั้งหมด').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('link_match').setLabel('🔗 สร้าง Link Match').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('update_threads').setLabel('🔄 อัปเดต Match Threads').setStyle(ButtonStyle.Secondary)
       ),
       new ActionRowBuilder().addComponents(
@@ -843,8 +843,8 @@ client.on('interactionCreate', async interaction => {
       if (interaction.customId === 'delete_threads') return interaction.showModal(rangeModal('delete_threads_modal', 'ลบ Threads ตามช่วง'));
       if (interaction.customId === 'delete_vc') return interaction.showModal(rangeModal('delete_vc_modal', 'ลบ VC + Category ตามช่วง'));
       if (interaction.customId === 'audit_vc') return interaction.showModal(rangeModal('audit_vc_modal', 'ตรวจสอบ Team VC'));
-      if (interaction.customId === 'thread_links') {
-        return interaction.reply({ content: '🔗 **เลือก Source Room**\nบอทจะสแกน Threads ที่มีอยู่จริงในห้องนี้ แล้วให้เลือก Destination Room ในขั้นถัดไป', components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('link_source').setPlaceholder('เลือก Source Room').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))] });
+      if (interaction.customId === 'link_match' || interaction.customId === 'thread_links') {
+        return interaction.reply({ content: '🔗 **สร้าง Link Match**\nเลือก Source Room ที่มี Match Threads อยู่จริง\n\nบอทจะสแกน Thread ที่มีอยู่ → ตรวจชื่อ `Team 1 vs Team 2` → หา VC ของทั้งสองทีม → แล้วให้เลือกห้องปลายทางสำหรับส่งลิงก์', components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('link_source').setPlaceholder('เลือก Source Room').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))] });
       }
       if (interaction.customId.startsWith('staff_complete:')) {
         const key = interaction.customId.slice('staff_complete:'.length), mapping = db.matches[key];
@@ -905,8 +905,24 @@ client.on('interactionCreate', async interaction => {
       if(interaction.customId==='batch_board'){p.boardChannelId=interaction.values[0];await interaction.update({content:`⏳ กำลังสร้าง Round ${p.round}, คู่ ${p.start}-${p.end}...`,components:[]});const results=await runRange(interaction.guild,p.round,p.start,p.end,{createVc:true,createThread:true,createBoard:true,announce:false,threadParentId:p.threadParentId,boardChannelId:p.boardChannelId});const good=results.filter(x=>x.status==='ok').length;return interaction.editReply({content:resultSummary(results,`🚀 Match Batch — Round ${p.round}, คู่ ${p.start}-${p.end}`)+`\n\n📢 การประกาศยังไม่ถูกส่งอัตโนมัติ — ใช้ปุ่ม **📢 ประกาศ Match Threads** เพื่อ Preview และยืนยันก่อนส่ง`});}
       if(interaction.customId==='announce_channel'){p.channelId=interaction.values[0];const report=await inspectAnnouncementRange(interaction.guild,p.round,p.start,p.end);const key=`announce:${interaction.user.id}:${Date.now()}`;pending.set(key,{createdAt:Date.now(),round:p.round,start:p.start,end:p.end,channelId:p.channelId});pending.delete(interaction.user.id);return interaction.update({content:announcementPreviewText(p.round,p.start,p.end,report,p.channelId),components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`confirm_announce:${key}`).setLabel('ยืนยันประกาศ').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('cancel_delete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))]});}
       if(interaction.customId==='threads_parent'){p.threadParentId=interaction.values[0];await interaction.update({content:`⏳ กำลังสร้าง Thread อย่างเดียว Round ${p.round}, คู่ ${p.start}-${p.end}...`,components:[]});const results=await runRange(interaction.guild,p.round,p.start,p.end,{createVc:false,createThread:true,createBoard:false,announce:false,threadParentId:p.threadParentId});return interaction.editReply({content:resultSummary(results,`🧵 Match Threads — Round ${p.round}, คู่ ${p.start}-${p.end}`)});}
-      if(interaction.customId==='link_source'){const sourceId=interaction.values[0];const scan=await scanThreadLinks(interaction.guild,sourceId);pending.set(interaction.user.id,{createdAt:Date.now(),mode:'link_threads',scan});return interaction.update({content:`🔎 สแกน Source สำเร็จ: <#${sourceId}>\nพบ Threads **${scan.results.length}** รายการ\n\nเลือก Destination Room ที่ต้องการส่งรายการ`,components:[new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('link_destination').setPlaceholder('เลือก Destination Room').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement))]});}
-      if(interaction.customId==='link_destination'){const p=pending.get(interaction.user.id);if(!p||p.mode!=='link_threads')return interaction.update({content:'⚠️ รายการหมดอายุแล้ว',components:[]});const msgs=buildThreadLinkMessages(interaction.guild,p.scan);const dest=await getChannel(interaction.guild,interaction.values[0]);if(!dest)return interaction.update({content:'❌ ไม่พบ Destination Room',components:[]});for(const msg of msgs)await dest.send({content:msg});pending.delete(interaction.user.id);return interaction.update({content:`🔗 ส่งรายการ Link Threads เรียบร้อย\nSource: <#${p.scan.source.id}>\nDestination: <#${dest.id}>\nข้อความ: **${msgs.length}**`,components:[]});}
+      if(interaction.customId==='link_source'){
+        const sourceId=interaction.values[0];
+        const source=await getChannel(interaction.guild,sourceId);
+        if(!source) return interaction.update({content:'❌ ไม่พบ Source Room',components:[]});
+        const scan=await scanThreadLinks(interaction.guild,sourceId);
+        return interaction.update({content:`🔎 **สแกน Source สำเร็จ**\nSource: <#${sourceId}>\nพบ Threads **${scan.results.length}** รายการ\n\nเลือก Destination Room ที่ต้องการส่งรายการ\n\n*ขั้นตอนนี้ไม่หมดอายุ — บอทจะสแกน Source ใหม่อีกครั้งตอนส่ง เพื่อให้ข้อมูลล่าสุด*`,components:[new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId(`link_destination:${sourceId}`).setPlaceholder('เลือก Destination Room').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement))]});
+      }
+      if(interaction.customId.startsWith('link_destination:')){
+        const sourceId=interaction.customId.split(':')[1];
+        const source=await getChannel(interaction.guild,sourceId);
+        const dest=await getChannel(interaction.guild,interaction.values[0]);
+        if(!source) return interaction.update({content:'❌ Source Room ไม่พบแล้ว กรุณากด 🔗 สร้าง Link Match ใหม่',components:[]});
+        if(!dest) return interaction.update({content:'❌ ไม่พบ Destination Room',components:[]});
+        const scan=await scanThreadLinks(interaction.guild,sourceId);
+        const msgs=buildThreadLinkMessages(interaction.guild,scan);
+        for(const msg of msgs) await dest.send({content:msg});
+        return interaction.update({content:`🔗 **สร้าง Link Match เรียบร้อย**\nSource: <#${source.id}>\nDestination: <#${dest.id}>\nThreads ที่ตรวจพบ: **${scan.results.length}**\nข้อความที่ส่ง: **${msgs.length}**`,components:[]});
+      }
     }
   } catch(error){console.error(error);const content=`❌ ${error.message||error}`;if(interaction.deferred)return interaction.editReply({content}).catch(()=>{});if(interaction.replied)return interaction.followUp({content}).catch(()=>{});return interaction.reply({content});}
 });

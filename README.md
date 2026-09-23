@@ -181,7 +181,7 @@ Batch still uses the same announcement logic, but asks for the announcement chan
 
 ## Thread Link Generator
 
-`🔗 สร้าง Link Threads ทั้งหมด` is read-only. It scans existing Discord private Team VCs whose names follow `#คู่ ชื่อทีม` (with `#2/#3` suffixes tolerated), groups them by pair number, derives `TEAM 1 VS TEAM 2`, and searches existing public Match Threads for that exact name in either order. It outputs clickable Discord links.
+`🔗 สร้าง Link Match` is read-only. It scans existing Discord private Team VCs whose names follow `#คู่ ชื่อทีม` (with `#2/#3` suffixes tolerated), groups them by pair number, derives `TEAM 1 VS TEAM 2`, and searches existing public Match Threads for that exact name in either order. It outputs clickable Discord links.
 
 It does not create, edit, or delete anything. Duplicate VC/team cases and duplicate Threads are reported instead of guessing.
 
@@ -308,7 +308,7 @@ Check Category, both VC permissions, Thread, VC links, Open ID, Staff Board, and
 - Panel and operational responses are public (not ephemeral).
 - Panel access is controlled by `ALLOWED_USER_IDS` (Discord User IDs), checked on every interaction.
 - `📢 ประกาศ Match Threads` now previews missing Threads and requires confirmation; only existing Threads are announced.
-- `🔗 สร้าง Link Threads ทั้งหมด` first selects a Source Room, scans only Threads that exist there, then selects a Destination Room.
+- `🔗 สร้าง Link Match` first selects a Source Room, scans only Threads that exist there, then selects a Destination Room.
 - Link Thread parser accepts only the exact visible format `XXX vs XXX` using lowercase `vs` with one separator. Invalid names are reported and never guessed. Duplicate matching Threads are reported and not auto-selected.
 - Thread link output includes Thread link and VC links for both teams; missing or multiple VCs are explicitly reported.
 - No Challonge API is used.
@@ -326,3 +326,10 @@ Check Category, both VC permissions, Thread, VC links, Open ID, Staff Board, and
 Recommended Discord permissions: View Channels, Send Messages, Read Message History, Use Application Commands, Manage Channels, Create Public Threads, Send Messages in Threads, Manage Threads, Manage Messages, Mention Everyone. Enable Message Content Intent.
 
 Test in this order: `VC Audit 1-1` → `VC-only 1-1` → `Thread-only 1-1` → `Batch 1-1` → Announcement preview/confirm → Link Threads source/destination → expand to `1-5` → then larger ranges.
+
+
+## v3.3.1 Link Match fix
+- The Panel button is `🔗 สร้าง Link Match`.
+- The Source → Destination flow no longer depends on an in-memory 10-minute pending state.
+- The destination select stores the Source Room ID in its custom ID and rescans the Source when sending, so the flow does not show the old “รายการหมดอายุแล้ว” message just because the pending map expired or the bot restarted between steps.
+- The old `thread_links` custom ID is still accepted for compatibility with an already-posted Panel message.
