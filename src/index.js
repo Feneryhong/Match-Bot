@@ -24,7 +24,7 @@ const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
-const BUILD_ID = 'v3.3.8-R512-THREAD-GLOBAL-RESOLVE';
+const BUILD_ID = 'v3.3.9-R512-THREAD-GLOBAL-RESOLVE-TIMEOUTFIX';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -1016,7 +1016,17 @@ client.on('interactionCreate', async interaction => {
       const p=pending.get(interaction.user.id);if(!p||Date.now()-p.createdAt>10*60*1000)return interaction.update({content:'⚠️ รายการหมดอายุแล้ว กดปุ่มใหม่อีกครั้ง',components:[]});
       if(interaction.customId==='batch_thread'){p.threadParentId=interaction.values[0];pending.set(interaction.user.id,p);return interaction.update({content:`Match Thread: <#${p.threadParentId}>\n\nเลือก Staff Board`,components:[new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('batch_board').setPlaceholder('2/2 เลือกห้อง Staff Board').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText))]});}
       if(interaction.customId==='batch_board'){p.boardChannelId=interaction.values[0];await interaction.update({content:`⏳ กำลังสร้าง Round ${p.round}, คู่ ${p.start}-${p.end}...`,components:[]});const results=await runRange(interaction.guild,p.round,p.start,p.end,{createVc:true,createThread:true,createBoard:true,announce:false,threadParentId:p.threadParentId,boardChannelId:p.boardChannelId});const good=results.filter(x=>x.status==='ok').length;return interaction.editReply({content:resultSummary(results,`🚀 Match Batch — Round ${p.round}, คู่ ${p.start}-${p.end}`)+`\n\n📢 การประกาศยังไม่ถูกส่งอัตโนมัติ — ใช้ปุ่ม **📢 ประกาศ Match Threads** เพื่อ Preview และยืนยันก่อนส่ง`});}
-      if(interaction.customId==='announce_channel'){p.channelId=interaction.values[0];const report=await inspectAnnouncementRange(interaction.guild,p.round,p.start,p.end);const key=`announce:${interaction.user.id}:${Date.now()}`;pending.set(key,{createdAt:Date.now(),round:p.round,start:p.start,end:p.end,channelId:p.channelId});pending.delete(interaction.user.id);return interaction.update({content:announcementPreviewText(p.round,p.start,p.end,report,p.channelId),components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`confirm_announce:${key}`).setLabel('ยืนยันประกาศ').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('cancel_delete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))]});}
+      if(interaction.customId==='announce_channel'){
+        // Global thread resolution can take longer than Discord's initial interaction window.
+        // Acknowledge immediately, then do the potentially expensive Discord scan.
+        await interaction.deferUpdate();
+        p.channelId=interaction.values[0];
+        const report=await inspectAnnouncementRange(interaction.guild,p.round,p.start,p.end);
+        const key=`announce:${interaction.user.id}:${Date.now()}`;
+        pending.set(key,{createdAt:Date.now(),round:p.round,start:p.start,end:p.end,channelId:p.channelId});
+        pending.delete(interaction.user.id);
+        return interaction.editReply({content:announcementPreviewText(p.round,p.start,p.end,report,p.channelId),components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`confirm_announce:${key}`).setLabel('ยืนยันประกาศ').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('cancel_delete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))]});
+      }
       if(interaction.customId==='threads_parent'){p.threadParentId=interaction.values[0];await interaction.update({content:`⏳ กำลังสร้าง Thread อย่างเดียว Round ${p.round}, คู่ ${p.start}-${p.end}...`,components:[]});const results=await runRange(interaction.guild,p.round,p.start,p.end,{createVc:false,createThread:true,createBoard:false,announce:false,threadParentId:p.threadParentId});return interaction.editReply({content:resultSummary(results,`🧵 Match Threads — Round ${p.round}, คู่ ${p.start}-${p.end}`)});}
     }
   } catch(error){console.error(error);const content=`❌ ${error.message||error}`;if(interaction.deferred)return interaction.editReply({content}).catch(()=>{});if(interaction.replied)return interaction.followUp({content}).catch(()=>{});return interaction.reply({content});}
