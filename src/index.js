@@ -24,7 +24,7 @@ const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
-const BUILD_ID = 'v3.3.7-R512-THREAD-RESOLVE';
+const BUILD_ID = 'v3.3.8-R512-THREAD-GLOBAL-RESOLVE';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -647,38 +647,57 @@ function resultSummary(results, title) {
   return lines.join('\n');
 }
 
-async function inspectAnnouncementRange(guild, round, start, end) {
-  const rows = getMatches(round, start, end);
-  if (!rows.length) throw new Error(`ไม่พบคู่ใน Round ${round}, Range ${start}-${end}`);
-
-  const found = [], missing = [];
-  const parentId = MATCH_THREAD_PARENT_ID;
-  const parent = await getChannel(guild, parentId).catch(() => null);
-
-  // Announcement must detect Threads that already exist in Discord even when
-  // the DB mapping is missing (e.g. bot restarted without persistent DB,
-  // mapping was created by an older build, or the thread was created manually).
-  // Build one normalized name index from the actual parent channel.
+async function collectAllMatchThreads(guild) {
   const actualThreads = new Map();
-  if (parent?.threads) {
+  const channels = [...guild.channels.cache.values()].filter(c =>
+    c && [ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(c.type) && c.threads
+  );
+
+  // First pass: active threads in EVERY possible text/announcement parent.
+  // This is important because Match Thread-only lets Staff choose the parent
+  // dynamically; therefore MATCH_THREAD_PARENT_ID cannot be the only source.
+  for (const parent of channels) {
     const active = await parent.threads.fetchActive().catch(() => null);
     if (active?.threads) {
-      for (const t of active.threads.values()) actualThreads.set(threadFindKey(t.name), t);
+      for (const t of active.threads.values()) {
+        const key = threadFindKey(t.name);
+        if (!actualThreads.has(key)) actualThreads.set(key, t);
+      }
     }
+  }
+
+  // Second pass: archived threads. Keep this bounded so announcement does not
+  // hammer Discord when a server has a very large history.
+  for (const parent of channels) {
     let before;
-    for (let page = 0; page < 20; page++) {
+    for (let page = 0; page < 5; page++) {
       const archived = await parent.threads.fetchArchived({
         type: 'public',
         limit: 100,
         ...(before ? { before } : {}),
       }).catch(() => null);
       if (!archived?.threads?.size) break;
-      for (const t of archived.threads.values()) actualThreads.set(threadFindKey(t.name), t);
+      for (const t of archived.threads.values()) {
+        const key = threadFindKey(t.name);
+        if (!actualThreads.has(key)) actualThreads.set(key, t);
+      }
       const last = archived.threads.last();
       if (!last || archived.threads.size < 100) break;
       before = last.id;
     }
   }
+  return actualThreads;
+}
+
+async function inspectAnnouncementRange(guild, round, start, end) {
+  const rows = getMatches(round, start, end);
+  if (!rows.length) throw new Error(`ไม่พบคู่ใน Round ${round}, Range ${start}-${end}`);
+
+  const found = [], missing = [];
+
+  // Do not assume a single fixed parent. Threads can be created in any room
+  // selected by the Staff in the Thread-only/Batch flow.
+  const actualThreads = await collectAllMatchThreads(guild);
 
   for (const match of rows) {
     const key = matchKey(match.round, match.pair);
