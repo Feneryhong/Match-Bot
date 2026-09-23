@@ -1155,16 +1155,23 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.isChannelSelectMenu() && interaction.customId === 'send_thread_channels') {
+      // Channel/thread scanning can take longer than Discord's ~3s interaction window.
+      // Acknowledge the select immediately, then do the scan and edit the response.
+      await interaction.deferUpdate();
       const key = `send:${interaction.user.id}`;
       const p = pending.get(key);
-      if (!p || p.mode !== 'send_thread' || Date.now() - p.createdAt > 10*60*1000) return interaction.update({ content: '⚠️ รายการหมดอายุแล้ว กดปุ่มใหม่อีกครั้ง', components: [] });
+      if (!p || p.mode !== 'send_thread' || Date.now() - p.createdAt > 10*60*1000) return interaction.editReply({ content: '⚠️ รายการหมดอายุแล้ว กดปุ่มใหม่อีกครั้ง', components: [] });
       const channelIds = interaction.values.slice(0, 4);
-      const { channels, targets } = await fetchSendThreadTargets(interaction.guild, channelIds, p.threadId);
-      if (!channels.length) return interaction.update({ content: '❌ ไม่พบห้องที่เลือก หรือบอทไม่มีสิทธิ์เข้าถึงห้องเหล่านั้น', components: [] });
-      if (p.threadId && !targets.length) return interaction.update({ content: `❌ ไม่พบ Thread ID \`${p.threadId}\` ในห้องที่เลือก`, components: [] });
-      if (!p.threadId && !targets.length) return interaction.update({ content: `ℹ️ ไม่พบ Match Thread ใน ${channels.length} ห้องที่เลือก`, components: [] });
-      p.channelIds = channels.map(c=>c.id); p.targetThreadIds = targets.map(x=>x.thread.id); p.createdAt = Date.now(); pending.set(key,p);
-      return interaction.update({ content: sendThreadPreview(channels, p.threadId, p.message, targets), components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`send_thread_confirm:${interaction.user.id}`).setLabel('Confirm ส่งข้อความ').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('send_thread_cancel').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))] });
+      try {
+        const { channels, targets } = await fetchSendThreadTargets(interaction.guild, channelIds, p.threadId);
+        if (!channels.length) return interaction.editReply({ content: '❌ ไม่พบห้องที่เลือก หรือบอทไม่มีสิทธิ์เข้าถึงห้องเหล่านั้น', components: [] });
+        if (p.threadId && !targets.length) return interaction.editReply({ content: `❌ ไม่พบ Thread ID \`${p.threadId}\` ในห้องที่เลือก`, components: [] });
+        if (!p.threadId && !targets.length) return interaction.editReply({ content: `ℹ️ ไม่พบ Match Thread ใน ${channels.length} ห้องที่เลือก`, components: [] });
+        p.channelIds = channels.map(c=>c.id); p.targetThreadIds = targets.map(x=>x.thread.id); p.createdAt = Date.now(); pending.set(key,p);
+        return interaction.editReply({ content: sendThreadPreview(channels, p.threadId, p.message, targets), components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`send_thread_confirm:${interaction.user.id}`).setLabel('Confirm ส่งข้อความ').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('send_thread_cancel').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))] });
+      } catch (e) {
+        return interaction.editReply({ content: `❌ สแกน Thread ไม่สำเร็จ\n\`${String(e?.message || e).slice(0, 700)}\``, components: [] });
+      }
     }
 
     if (interaction.isChannelSelectMenu()) {
