@@ -1,4 +1,4 @@
-# RoV CSV Pipeline Discord Bot — v3.1
+# RoV CSV Pipeline Discord Bot — v3.2
 
 This build is the CSV-first pipeline agreed for the RoV tournament. It uses **Challonge A only** and does **not** call the Challonge API.
 
@@ -173,9 +173,17 @@ Pressing it again reports who already completed the Match.
 
 ## Announcements
 
-Announcement channel is fixed by `ANNOUNCEMENT_CHANNEL_ID`.
+Announcement is a separate operation. Each time Staff presses `📢 ประกาศ Match Threads`, the bot asks for the Round, Range, and the Discord channel to announce into. It never creates a Thread/VC as part of the standalone announcement operation.
 
-Batch announcements are grouped by the CSV match time (for example 19:00, 20:00, 21:00, 22:00) and include Match Thread links.
+Announcements are grouped by the CSV match time (for example 19:00, 20:00, 21:00, 22:00) and include existing Match Thread links. If a requested pair has no resolvable Thread, it is reported and skipped rather than created.
+
+Batch still uses the same announcement logic, but asks for the announcement channel as the final channel selection.
+
+## Thread Link Generator
+
+`🔗 สร้าง Link Threads ทั้งหมด` is read-only. It scans existing Discord private Team VCs whose names follow `#คู่ ชื่อทีม` (with `#2/#3` suffixes tolerated), groups them by pair number, derives `TEAM 1 VS TEAM 2`, and searches existing public Match Threads for that exact name in either order. It outputs clickable Discord links.
+
+It does not create, edit, or delete anything. Duplicate VC/team cases and duplicate Threads are reported instead of guessing.
 
 ## Discord Developer Portal requirements
 
@@ -227,15 +235,13 @@ DISCORD_TOKEN=...
 CLIENT_ID=...
 GUILD_ID=...
 ROSTER_CHANNEL_ID=...
-ANNOUNCEMENT_CHANNEL_ID=...
-TOURNAMENT_A_URL=https://challonge.com/1gv5vasi
+ALLOWED_USER_IDS=123456789012345678,987654321098765432
 ```
 
 Optional:
 
 ```text
 STAFF_CHANNEL_ID=...
-ALLOWED_ROLE_IDS=roleId1,roleId2
 MATCH_THREAD_PARENT_ID=...
 STAFF_BOARD_CHANNEL_ID=...
 ```
@@ -295,3 +301,28 @@ Finally test:
 ```
 
 Check Category, both VC permissions, Thread, VC links, Open ID, Staff Board, and Announcement before expanding the range.
+
+
+## v3.3 changes
+
+- Panel and operational responses are public (not ephemeral).
+- Panel access is controlled by `ALLOWED_USER_IDS` (Discord User IDs), checked on every interaction.
+- `📢 ประกาศ Match Threads` now previews missing Threads and requires confirmation; only existing Threads are announced.
+- `🔗 สร้าง Link Threads ทั้งหมด` first selects a Source Room, scans only Threads that exist there, then selects a Destination Room.
+- Link Thread parser accepts only the exact visible format `XXX vs XXX` using lowercase `vs` with one separator. Invalid names are reported and never guessed. Duplicate matching Threads are reported and not auto-selected.
+- Thread link output includes Thread link and VC links for both teams; missing or multiple VCs are explicitly reported.
+- No Challonge API is used.
+
+### Railway deploy/update
+
+1. Replace the project files with this version and push to the GitHub repository connected to Railway.
+2. Keep the existing Railway service and existing Volume mounted at `/data`.
+3. In Railway Variables set: `DISCORD_TOKEN`, `CLIENT_ID`, `GUILD_ID`, `ROSTER_CHANNEL_ID`, and `ALLOWED_USER_IDS`.
+4. Keep `MATCH_CSV_PATH=./data/round512.csv`, `OPENID_CSV_PATH=./data/approved-teams-openid-cleaned.csv`, and `DB_PATH=/data/rov-csv-bot.json` unless your deployment uses different paths.
+5. `ALLOWED_ROLE_IDS` is no longer used. Remove it if present.
+6. Commit/push. Railway will redeploy with `npm start`.
+7. After deploy, run `/panel` in the configured Staff channel (if `STAFF_CHANNEL_ID` is set). Everyone can see the Panel, but only listed User IDs can operate it.
+
+Recommended Discord permissions: View Channels, Send Messages, Read Message History, Use Application Commands, Manage Channels, Create Public Threads, Send Messages in Threads, Manage Threads, Manage Messages, Mention Everyone. Enable Message Content Intent.
+
+Test in this order: `VC Audit 1-1` → `VC-only 1-1` → `Thread-only 1-1` → `Batch 1-1` → Announcement preview/confirm → Link Threads source/destination → expand to `1-5` → then larger ranges.

@@ -15,9 +15,8 @@ const TOKEN = env.DISCORD_TOKEN;
 const CLIENT_ID = env.CLIENT_ID;
 const GUILD_ID = env.GUILD_ID;
 const STAFF_CHANNEL_ID = env.STAFF_CHANNEL_ID || '';
-const ALLOWED_ROLE_IDS = (env.ALLOWED_ROLE_IDS || '').split(',').map(x => x.trim()).filter(Boolean);
+const ALLOWED_USER_IDS = (env.ALLOWED_USER_IDS || '').split(',').map(x => x.trim()).filter(Boolean);
 const ROSTER_CHANNEL_ID = env.ROSTER_CHANNEL_ID || '';
-const ANNOUNCEMENT_CHANNEL_ID = env.ANNOUNCEMENT_CHANNEL_ID || '';
 const MATCH_THREAD_PARENT_ID = env.MATCH_THREAD_PARENT_ID || '';
 const STAFF_BOARD_CHANNEL_ID = env.STAFF_BOARD_CHANNEL_ID || '';
 const DB_PATH = env.DB_PATH || '/data/rov-csv-bot.json';
@@ -25,12 +24,10 @@ const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
-const TOURNAMENT_URL = env.TOURNAMENT_A_URL || 'https://challonge.com/1gv5vasi';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
 if (!ROSTER_CHANNEL_ID) throw new Error('Missing ROSTER_CHANNEL_ID');
-if (!ANNOUNCEMENT_CHANNEL_ID) throw new Error('Missing ANNOUNCEMENT_CHANNEL_ID');
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
@@ -101,14 +98,16 @@ function linkMessage(guildId, channelId, messageId, label) { return messageId ? 
 
 function staff(interaction) {
   if (!interaction.inGuild()) return false;
-  if (interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) return true;
-  if (ALLOWED_ROLE_IDS.length) return !!interaction.member?.roles?.cache && ALLOWED_ROLE_IDS.some(id => interaction.member.roles.cache.has(id));
-  return !!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
+  return ALLOWED_USER_IDS.includes(String(interaction.user.id));
 }
 function staffGuard(interaction) {
-  if (!staff(interaction)) return '❌ ไม่มีสิทธิ์ Staff';
+  if (!staff(interaction)) return '❌ คุณไม่มีสิทธิ์ใช้งาน Panel นี้';
   if (STAFF_CHANNEL_ID && interaction.channelId !== STAFF_CHANNEL_ID) return `❌ ใช้ Panel ได้เฉพาะ <#${STAFF_CHANNEL_ID}>`;
   return null;
+}
+function publicDenied(interaction, message) {
+  if (interaction.deferred || interaction.replied) return interaction.editReply({ content: message, components: [] }).catch(() => {});
+  return interaction.reply({ content: message });
 }
 async function getChannel(guild, id) { return guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null); }
 
@@ -474,10 +473,17 @@ function threadFindKey(name) { return norm(name); }
 async function findExistingThread(parent, match) {
   if (!parent?.threads) return null;
   const active = await parent.threads.fetchActive().catch(() => null);
-  const archived = await parent.threads.fetchArchived({ type: 'public', limit: 100 }).catch(() => null);
   const all = [];
   if (active?.threads) all.push(...active.threads.values());
-  if (archived?.threads) all.push(...archived.threads.values());
+  let before;
+  for (let page = 0; page < 20; page++) {
+    const archived = await parent.threads.fetchArchived({ type: 'public', limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+    if (!archived?.threads?.size) break;
+    all.push(...archived.threads.values());
+    const last = archived.threads.last();
+    if (!last || archived.threads.size < 100) break;
+    before = last.id;
+  }
   return all.find(t => threadFindKey(t.name) === threadFindKey(threadName(match))) || null;
 }
 
@@ -557,7 +563,6 @@ function staffBoardContent(guild, match, mapping) {
   const vc1 = mapping.vc1Id ? linkChannel(guild.id, mapping.vc1Id, 'เปิด VC') : '—';
   const vc2 = mapping.vc2Id ? linkChannel(guild.id, mapping.vc2Id, 'เปิด VC') : '—';
   const thread = mapping.threadId ? linkChannel(guild.id, mapping.threadId, 'เปิด Match Thread') : '—';
-  const challonge = TOURNAMENT_URL ? `[เปิด Challonge](${TOURNAMENT_URL})` : '—';
   return [
     '━━━━━━━━━━━━━━━━━━━━',
     `🏆 **Round ${match.round} — คู่ ${match.pair}**`,
@@ -569,7 +574,6 @@ function staffBoardContent(guild, match, mapping) {
     `🔊 **${match.team2}** — ${vc2}`,
     '',
     `🧵 **Match Thread** — ${thread}`,
-    `🔗 **Challonge** — ${challonge}`,
     '',
     completed ? `🔒 **แข่งเสร็จแล้ว** — <@${mapping.completedBy}>\n🕐 <t:${Math.floor(new Date(completed).getTime() / 1000)}:F>` : '🟡 **รอดำเนินการ**',
     '━━━━━━━━━━━━━━━━━━━━'
@@ -591,127 +595,176 @@ async function ensureBoard(guild, match, boardChannelId, mapping) {
   return message;
 }
 
-async function createAnnouncement(guild, match, mapping) {
-  const channel = await getChannel(guild, ANNOUNCEMENT_CHANNEL_ID);
-  if (!channel || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(channel.type)) throw new Error('Announcement Channel ไม่ถูกต้อง');
-  const key = matchKey(match.round, match.pair);
-  if (db.announcements[key]?.messageId) return db.announcements[key];
-  const content = [
-    '@everyone',
-    `🏆 **Round ${match.round} — คู่ ${match.pair}**`,
-    `🕐 เวลา: **${match.time || 'ไม่ระบุ'}**`,
-    `**${match.team1} VS ${match.team2}**`,
-    mapping.threadId ? `🧵 ${linkChannel(guild.id, mapping.threadId, 'เปิด Match Thread')}` : ''
-  ].filter(Boolean).join('\n');
-  const message = await channel.send({ content });
-  db.announcements[key] = { channelId: channel.id, messageId: message.id, time: match.time || '', createdAt: new Date().toISOString() };
-  return db.announcements[key];
-}
-
-async function ensureOne(guild, match, options, context = {}) {
-  const key = matchKey(match.round, match.pair);
-  const mapping = db.matches[key] || { round: String(match.round), pair: match.pair, team1: match.team1, team2: match.team2, time: match.time, challongeMatchId: match.challongeMatchId };
-  const r1 = context.rosterAudit?.result.get(norm(match.team1));
-  const r2 = context.rosterAudit?.result.get(norm(match.team2));
-
-  if (!isTbd(match.team1) && (!r1 || r1.status !== 'found' || r1.formatIssue)) throw new Error(`Team 1 ${match.team1}: ${auditBucket({ status: r1?.status || 'missing_roster' })}${r1?.formatIssue ? ' — ' + r1.formatIssue : ''}`);
-  if (!isTbd(match.team2) && (!r2 || r2.status !== 'found' || r2.formatIssue)) throw new Error(`Team 2 ${match.team2}: ${auditBucket({ status: r2?.status || 'missing_roster' })}${r2?.formatIssue ? ' — ' + r2.formatIssue : ''}`);
-
-  const createdNow = [];
-  try {
-    if (options.createVc) {
-      const a = await createOrGetVc(guild, match, match.team1, 'team1', r1, context.voiceChannels);
-      if (a.created && a.channel) createdNow.push(a.channel);
-      const b = await createOrGetVc(guild, match, match.team2, 'team2', r2, context.voiceChannels);
-      if (b.created && b.channel) createdNow.push(b.channel);
-      mapping.vc1Id = a.channel?.id || mapping.vc1Id || null;
-      mapping.vc2Id = b.channel?.id || mapping.vc2Id || null;
-      mapping.vc1Created = a.created;
-      mapping.vc2Created = b.created;
-      mapping.roster1 = r1?.roster ? { messageId: r1.roster.messageId, authorId: r1.roster.authorId, createdTimestamp: r1.roster.createdTimestamp } : null;
-      mapping.roster2 = r2?.roster ? { messageId: r2.roster.messageId, authorId: r2.roster.authorId, createdTimestamp: r2.roster.createdTimestamp } : null;
-    } else {
-      const v1 = mapping.vc1Id ? await guild.channels.fetch(mapping.vc1Id).catch(() => null) : null;
-      const v2 = mapping.vc2Id ? await guild.channels.fetch(mapping.vc2Id).catch(() => null) : null;
-      const voiceChannels = context.voiceChannels || await allVoiceChannels(guild);
-      const c1 = isTbd(match.team1) ? [] : findVcCandidates(voiceChannels, match.team1, match.pair);
-      const c2 = isTbd(match.team2) ? [] : findVcCandidates(voiceChannels, match.team2, match.pair);
-      if (c1.length > 1) throw new Error(`พบ VC ซ้ำสำหรับ ${match.team1}: ${c1.map(c => c.name).join(', ')}`);
-      if (c2.length > 1) throw new Error(`พบ VC ซ้ำสำหรับ ${match.team2}: ${c2.map(c => c.name).join(', ')}`);
-      mapping.vc1Id = v1?.type === ChannelType.GuildVoice ? v1.id : (c1[0]?.id || null);
-      mapping.vc2Id = v2?.type === ChannelType.GuildVoice ? v2.id : (c2[0]?.id || null);
-    }
-
-    if (options.createThread) {
-      const vc1 = mapping.vc1Id ? await guild.channels.fetch(mapping.vc1Id).catch(() => null) : null;
-      const vc2 = mapping.vc2Id ? await guild.channels.fetch(mapping.vc2Id).catch(() => null) : null;
-      const t = await ensureThread(guild, match, options.threadParentId, vc1, vc2);
-      mapping.threadId = t.thread.id;
-      mapping.welcomePosted = true;
-      mapping.vcLinksPosted = true;
-      mapping.lastVc1Id = mapping.vc1Id || null;
-      mapping.lastVc2Id = mapping.vc2Id || null;
-      mapping.openIdPosted = true;
-    }
-
-    if (options.createBoard) await ensureBoard(guild, match, options.boardChannelId, mapping);
-    mapping.updatedAt = new Date().toISOString();
-    db.matches[key] = mapping;
-    db.threads[key] = mapping.threadId ? { threadId: mapping.threadId, parentChannelId: options.threadParentId || MATCH_THREAD_PARENT_ID } : db.threads[key];
-    db.vcs[key] = { vc1Id: mapping.vc1Id || null, vc2Id: mapping.vc2Id || null };
-    return mapping;
-  } catch (error) {
-    for (const channel of createdNow.reverse()) await channel.delete().catch(() => {});
-    throw error;
-  }
-}
-async function runRange(guild, round, start, end, options) {
-  const list = getMatches(round, start, end);
-  if (!list.length) throw new Error(`ไม่พบคู่ใน Round ${round}, Range ${start}-${end}`);
-  const teams = [...new Set(list.flatMap(m => [m.team1, m.team2]).filter(t => !isTbd(t)))];
-  const rosterChannel = await getChannel(guild, ROSTER_CHANNEL_ID);
-  if (!rosterChannel || rosterChannel.type !== ChannelType.GuildText) throw new Error('ไม่พบ Team Roster Channel');
-  const rosterMessages = await fetchAllMessages(rosterChannel);
-  const rosterAudit = await buildRosterAudit(guild, teams, rosterMessages);
-  const context = { rosterAudit, voiceChannels: options.createVc || !options.createVc && options.createThread ? await allVoiceChannels(guild) : null };
+async function runRange(guild, round, start, end, options = {}) {
+  const rows = getMatches(round, start, end);
+  if (!rows.length) throw new Error(`ไม่พบคู่ใน Round ${round}, Range ${start}-${end}`);
   const results = [];
-  for (const match of list) {
-    try { results.push({ match, ok: true, mapping: await ensureOne(guild, match, options, context) }); }
-    catch (error) { results.push({ match, ok: false, error: error.message || String(error) }); }
+  const voices = options.createVc ? await allVoiceChannels(guild) : null;
+  const rosterAudit = (options.createVc || options.createBoard) ? await buildRosterAudit(guild, [...new Set(rows.flatMap(m => [m.team1, m.team2]).filter(t => !isTbd(t)))]) : null;
+  for (const match of rows) {
+    const key = matchKey(match.round, match.pair);
+    const mapping = db.matches[key] || (db.matches[key] = {
+      round: String(match.round), pair: match.pair, team1: match.team1, team2: match.team2, time: match.time || '',
+      vc1Id: null, vc2Id: null, threadId: null, boardMessageId: null, completedAt: null, completedBy: null
+    });
+    mapping.round = String(match.round); mapping.pair = match.pair; mapping.team1 = match.team1; mapping.team2 = match.team2; mapping.time = match.time || '';
+    try {
+      let vc1 = mapping.vc1Id ? await guild.channels.fetch(mapping.vc1Id).catch(() => null) : null;
+      let vc2 = mapping.vc2Id ? await guild.channels.fetch(mapping.vc2Id).catch(() => null) : null;
+      const r1 = rosterAudit?.result.get(norm(match.team1));
+      const r2 = rosterAudit?.result.get(norm(match.team2));
+      if (options.createVc) {
+        const a = await createOrGetVc(guild, match, match.team1, 'team1', r1, voices);
+        const b = await createOrGetVc(guild, match, match.team2, 'team2', r2, voices);
+        vc1 = a.channel; vc2 = b.channel;
+        if (vc1) mapping.vc1Id = vc1.id;
+        if (vc2) mapping.vc2Id = vc2.id;
+      }
+      if (options.createThread) {
+        const th = await ensureThread(guild, match, options.threadParentId || MATCH_THREAD_PARENT_ID, vc1, vc2);
+        mapping.threadId = th.thread.id;
+        mapping.threadParentId = th.thread.parentId;
+        mapping.welcomePosted = true; mapping.vcLinksPosted = true; mapping.openIdPosted = true;
+      }
+      if (options.createBoard) await ensureBoard(guild, match, options.boardChannelId || STAFF_BOARD_CHANNEL_ID, mapping);
+      results.push({ match, status: 'ok', vc1, vc2, threadId: mapping.threadId });
+    } catch (error) {
+      results.push({ match, status: 'failed', error: String(error.message || error) });
+    }
   }
   saveDb();
   return results;
 }
-function resultSummary(results, label) {
-  const ok = results.filter(x => x.ok).length; const bad = results.length - ok;
-  const lines = [`${label}`, `✅ สำเร็จ: **${ok} คู่**`, `❌ ต้องแก้: **${bad} คู่**`];
-  for (const r of results.filter(x => !x.ok).slice(0, 20)) lines.push(`• คู่ ${r.match.pair}: ${r.error}`);
-  if (bad > 20) lines.push(`… และอีก ${bad - 20} คู่`);
+function resultSummary(results, title) {
+  const ok = results.filter(x => x.status === 'ok');
+  const failed = results.filter(x => x.status !== 'ok');
+  const lines = [title, '', `🟢 สำเร็จ: **${ok.length}**`, `🔴 มีปัญหา: **${failed.length}**`];
+  for (const r of failed.slice(0, 20)) lines.push(`• คู่ ${r.match.pair} — ${r.match.team1} VS ${r.match.team2}\n  ${r.error}`);
+  if (failed.length > 20) lines.push(`…และอีก ${failed.length - 20} รายการ`);
   return lines.join('\n');
 }
 
-async function announceGrouped(guild, results) {
-  const channel = await getChannel(guild, ANNOUNCEMENT_CHANNEL_ID);
-  if (!channel) throw new Error('Announcement Channel ไม่พบ');
-  const groups = new Map();
-  for (const r of results.filter(x => x.ok)) {
-    const time = r.match.time || 'ไม่ระบุเวลา';
-    if (!groups.has(time)) groups.set(time, []);
-    groups.get(time).push(r);
+async function inspectAnnouncementRange(guild, round, start, end) {
+  const rows = getMatches(round, start, end);
+  if (!rows.length) throw new Error(`ไม่พบคู่ใน Round ${round}, Range ${start}-${end}`);
+  const found = [], missing = [];
+  for (const match of rows) {
+    const key = matchKey(match.round, match.pair);
+    const mapping = db.matches[key] || {};
+    const thread = mapping.threadId ? await guild.channels.fetch(mapping.threadId).catch(() => null) : null;
+    if (thread?.isThread?.()) found.push({ match, mapping, thread });
+    else missing.push(match);
   }
-  for (const [time, rows] of groups) {
-    const key = `group:${rows[0].match.round}:${time}:${rows[0].match.pair}-${rows[rows.length - 1].match.pair}`;
-    if (db.announcements[key]?.messageId) continue;
-    const lines = ['@everyone', `🏆 **Round ${rows[0].match.round} — เวลา ${time}**`, ''];
-    for (const r of rows) {
-      const m = r.match; lines.push(`**คู่ ${m.pair}** — ${m.team1} VS ${m.team2}`);
-      if (r.mapping.threadId) lines.push(`🧵 ${linkChannel(guild.id, r.mapping.threadId, 'เปิด Thread')}`);
-      lines.push('');
-    }
-    const msg = await channel.send({ content: lines.join('\n') });
-    db.announcements[key] = { channelId: channel.id, messageId: msg.id, time, round: rows[0].match.round, createdAt: new Date().toISOString() };
-  }
+  return { rows, found, missing };
 }
+function announcementPreviewText(round, start, end, report, channelId) {
+  const lines = [`📢 **Preview การประกาศ Match Threads**`, `Round ${round} | คู่ ${start}-${end}`, `ห้องประกาศ: <#${channelId}>`, '', `🟢 พบ Thread: **${report.found.length} คู่**`, `🔴 ไม่พบ Thread: **${report.missing.length} คู่**`];
+  if (report.missing.length) {
+    lines.push('', '❌ **Thread ที่หาไม่พบ**');
+    for (const m of report.missing.slice(0, 30)) lines.push(`• คู่ ${m.pair} — ${m.team1} VS ${m.team2}`);
+    if (report.missing.length > 30) lines.push(`…และอีก ${report.missing.length - 30} คู่`);
+  }
+  lines.push('', '⚠️ หากยืนยัน ระบบจะประกาศ **เฉพาะ Thread ที่พบ** และจะไม่สร้าง Thread ที่หาย');
+  return lines.join('\n');
+}
+async function sendAnnouncementReport(guild, report, channelId, round) {
+  const channel = await getChannel(guild, channelId);
+  if (!channel || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(channel.type)) throw new Error('Announcement Channel ไม่ถูกต้อง');
+  const groups = new Map();
+  for (const item of report.found) {
+    const time = item.match.time || 'ไม่ระบุเวลา';
+    if (!groups.has(time)) groups.set(time, []);
+    groups.get(time).push(item);
+  }
+  const sent = [];
+  for (const [time, items] of groups) {
+    const lines = ['@everyone', `🏆 **Round ${round} — เวลา ${time}**`, ''];
+    for (const { match, thread } of items) {
+      lines.push(`**${match.team1} VS ${match.team2}**`);
+      lines.push(`🧵 ${linkChannel(guild.id, thread.id, 'เปิด Thread')}`, '');
+    }
+    const msg = await channel.send({ content: lines.join('\n'), allowedMentions: { parse: ['everyone'] } });
+    sent.push({ time, count: items.length, messageId: msg.id });
+    db.announcements[`manual:${channel.id}:${round}:${time}:${items.map(x => x.match.pair).join(',')}`] = { channelId: channel.id, messageId: msg.id, time, round: String(round), pairs: items.map(x => x.match.pair), createdAt: new Date().toISOString() };
+  }
+  saveDb();
+  return { sent, channel, missing: report.missing };
+}
+
+
+async function fetchThreadsFromSourceRoom(parent) {
+  if (!parent || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(parent.type)) throw new Error('Source Room ต้องเป็น Text Channel หรือ Announcement Channel');
+  const active = await parent.threads.fetchActive().catch(() => null);
+  const all = [];
+  if (active?.threads) all.push(...active.threads.values());
+  let before;
+  for (let page = 0; page < 20; page++) {
+    const archived = await parent.threads.fetchArchived({ type: 'public', limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+    if (!archived?.threads?.size) break;
+    all.push(...archived.threads.values());
+    const last = archived.threads.last();
+    if (!last || archived.threads.size < 100) break;
+    before = last.id;
+  }
+  return [...new Map(all.map(t => [t.id, t])).values()];
+}
+function parseStrictThreadName(name) {
+  const raw = String(name || '').trim();
+  const parts = raw.split(' vs ');
+  if (parts.length !== 2) return null;
+  const team1 = parts[0].trim(), team2 = parts[1].trim();
+  if (!team1 || !team2) return null;
+  return { team1, team2 };
+}
+async function scanThreadLinks(guild, sourceChannelId) {
+  const source = await getChannel(guild, sourceChannelId);
+  const threads = await fetchThreadsFromSourceRoom(source);
+  const voices = await allVoiceChannels(guild);
+  const results = [];
+  const parsedGroups = new Map();
+  for (const thread of threads) {
+    const parsed = parseStrictThreadName(thread.name);
+    if (!parsed) { results.push({ status: 'invalid_thread', thread }); continue; }
+    const pairKey = `${norm(parsed.team1)}\u0000${norm(parsed.team2)}`;
+    if (!parsedGroups.has(pairKey)) parsedGroups.set(pairKey, []);
+    parsedGroups.get(pairKey).push(thread);
+  }
+  for (const [pairKey, group] of parsedGroups) {
+    const parsed = parseStrictThreadName(group[0].name);
+    if (group.length > 1) { results.push({ status: 'duplicate_thread', threads: group, ...parsed }); continue; }
+    const thread = group[0];
+    const vcResults = [];
+    for (const team of [parsed.team1, parsed.team2]) {
+      const candidates = findRelatedVcCandidates(voices, team);
+      vcResults.push({ team, candidates });
+    }
+    results.push({ status: 'found', thread, ...parsed, vcResults });
+  }
+  return { source, results };
+}
+function buildThreadLinkMessages(guild, scan) {
+  const blocks = [`🔗 **Link Threads**`, `Source Room: <#${scan.source.id}>`, `ตรวจพบ Threads: **${scan.results.length}**`, '', 'กติกาชื่อ Thread: `XXX vs XXX` เท่านั้น'];
+  for (const r of scan.results) {
+    if (r.status === 'invalid_thread') {
+      blocks.push(`⚠️ **Thread Format ไม่ถูกต้อง**\nชื่อ: ${r.thread.name}\nthread : ${linkChannel(guild.id, r.thread.id, 'link')}`);
+      continue;
+    }
+    if (r.status === 'duplicate_thread') {
+      blocks.push(`⚠️ **พบ Thread ซ้ำ**\n${r.team1} vs ${r.team2}`);
+      for (const t of r.threads) blocks.push(`thread : ${linkChannel(guild.id, t.id, 'link')}`);
+      continue;
+    }
+    const lines = [`${r.team1} vs ${r.team2}`, `thread : ${linkChannel(guild.id, r.thread.id, 'link')}`];
+    for (const v of r.vcResults) {
+      if (v.candidates.length === 0) lines.push(`VC ${v.team} : ❌ ไม่พบ`);
+      else if (v.candidates.length === 1) lines.push(`VC ${v.team} : ${linkChannel(guild.id, v.candidates[0].id, 'link')}`);
+      else { lines.push(`VC ${v.team} : ⚠️ พบ ${v.candidates.length} ห้อง`); for (const c of v.candidates) lines.push(`• ${c.name} : ${linkChannel(guild.id, c.id, 'link')}`); }
+    }
+    blocks.push(lines.join('\n'));
+  }
+  return splitDiscordText(blocks, 1900);
+}
+
 
 function parseRange(value) {
   const raw = String(value || '').trim();
@@ -733,15 +786,18 @@ function batchModal() { return rangeModal('batch_modal', 'สร้าง Match 
 
 function panel() {
   return {
-    content: `🏆 **RoV Tournament CSV Pipeline — ${TOURNAMENT_NAME}**\n\n**Source:** CSV\n**Challonge API:** ปิด\n**Roster:** <#${ROSTER_CHANNEL_ID}> (ใช้ข้อความล่าสุดของแต่ละทีมเท่านั้น)\n**Announcement:** <#${ANNOUNCEMENT_CHANNEL_ID}>`,
+    content: `🏆 **RoV Tournament CSV Pipeline — ${TOURNAMENT_NAME}**\n\n**Source:** CSV\n**Challonge API:** ปิด\n**Roster:** <#${ROSTER_CHANNEL_ID}> (ใช้ข้อความล่าสุดของแต่ละทีมเท่านั้น)\n**Announcement:** เลือกห้องทุกครั้งที่กดประกาศ
+**ผู้มีสิทธิ์:** ${ALLOWED_USER_IDS.length ? ALLOWED_USER_IDS.map(id => `<@${id}>`).join(', ') : 'ยังไม่ได้กำหนด'}`,
     components: [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('batch').setLabel('🚀 สร้าง Match Batch').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('threads_only').setLabel('🧵 สร้างเฉพาะ Match Threads').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('vc_only').setLabel('🔊 สร้างเฉพาะ Team VC').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('vc_only').setLabel('🔊 สร้างเฉพาะ Team VC').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('announce').setLabel('📢 ประกาศ Match Threads').setStyle(ButtonStyle.Secondary)
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('audit_vc').setLabel('🔍 ตรวจสอบ Team VC').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('thread_links').setLabel('🔗 สร้าง Link Threads ทั้งหมด').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('update_threads').setLabel('🔄 อัปเดต Match Threads').setStyle(ButtonStyle.Secondary)
       ),
       new ActionRowBuilder().addComponents(
@@ -763,161 +819,95 @@ client.once('ready', async () => {
   console.log(`📦 Match CSV: ${MATCH_CSV_PATH}`);
   console.log(`🪪 Open ID: ${OPENID_CSV_PATH} (${openIds.size} teams)`);
   console.log(`📋 Roster: ${ROSTER_CHANNEL_ID}`);
-  console.log(`📢 Announcement: ${ANNOUNCEMENT_CHANNEL_ID}`);
+  console.log('📢 Announcement: เลือกห้องตอนสั่งงาน');
   console.log('🚫 Challonge API calls: DISABLED');
 });
 
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand() && interaction.commandName === 'panel') {
-      const denied = staffGuard(interaction); if (denied) return interaction.reply({ content: denied, ephemeral: true });
-      pending.set(interaction.user.id, { createdAt: Date.now() });
-      return interaction.reply({ ...panel(), ephemeral: true });
+      const denied = staffGuard(interaction); if (denied) return publicDenied(interaction, denied);
+      return interaction.reply(panel());
     }
     if (!interaction.inGuild()) return;
 
     if (interaction.isButton()) {
-      const denied = staffGuard(interaction); if (denied) return interaction.reply({ content: denied, ephemeral: true });
+      const denied = staffGuard(interaction); if (denied) return publicDenied(interaction, denied);
       if (interaction.customId === 'refresh') return interaction.update(panel());
-      if (interaction.customId === 'status') {
-        const rows = readCsv(MATCH_CSV_PATH); const dbCount = Object.keys(db.matches).length;
-        return interaction.reply({ content: `📊 CSV: **${rows.length} คู่**\nDB: **${dbCount} mappings**\nOpen ID: **${openIds.size} ทีม**\nRoster Channel: <#${ROSTER_CHANNEL_ID}>\nAnnouncement: <#${ANNOUNCEMENT_CHANNEL_ID}>\nChallonge API: **ปิด**`, ephemeral: true });
-      }
+      if (interaction.customId === 'status') return interaction.reply({ content: `📊 CSV: **${readCsv(MATCH_CSV_PATH).length} คู่**\nDB: **${Object.keys(db.matches).length} mappings**\nOpen ID: **${openIds.size} ทีม**\nRoster: <#${ROSTER_CHANNEL_ID}>\nสิทธิ์ User ID: **${ALLOWED_USER_IDS.length} คน**\nChallonge API: **ปิด**` });
       if (interaction.customId === 'batch') return interaction.showModal(batchModal());
       if (interaction.customId === 'threads_only') return interaction.showModal(rangeModal('threads_modal', 'สร้างเฉพาะ Match Threads'));
       if (interaction.customId === 'vc_only') return interaction.showModal(rangeModal('vc_modal', 'สร้างเฉพาะ Team VC'));
-      if (interaction.customId === 'audit_vc') return interaction.showModal(rangeModal('audit_vc_modal', 'ตรวจสอบ Team VC'));
+      if (interaction.customId === 'announce') return interaction.showModal(rangeModal('announce_modal', 'ประกาศ Match Threads'));
       if (interaction.customId === 'update_threads') return interaction.showModal(rangeModal('update_threads_modal', 'อัปเดต Match Threads'));
       if (interaction.customId === 'delete_threads') return interaction.showModal(rangeModal('delete_threads_modal', 'ลบ Threads ตามช่วง'));
       if (interaction.customId === 'delete_vc') return interaction.showModal(rangeModal('delete_vc_modal', 'ลบ VC + Category ตามช่วง'));
-
-      if (interaction.customId.startsWith('staff_complete:')) {
-        const key = interaction.customId.slice('staff_complete:'.length);
-        const mapping = db.matches[key];
-        if (!mapping) return interaction.reply({ content: '❌ ไม่พบ Match ใน DB', ephemeral: true });
-        if (mapping.completedAt) return interaction.reply({ content: `🔒 Match นี้ปิดไปแล้วโดย <@${mapping.completedBy}> เมื่อ <t:${Math.floor(new Date(mapping.completedAt).getTime() / 1000)}:F>`, ephemeral: true });
-        return interaction.reply({
-          content: `⚠️ **ยืนยันการปิด Match**\n\n**${mapping.team1} VS ${mapping.team2}**\n\nต้องการยืนยันว่าแข่งเสร็จแล้วใช่หรือไม่?`,
-          ephemeral: true,
-          components: [new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`confirm_complete:${key}`).setLabel('ยืนยัน').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('cancel_complete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary)
-          )]
-        });
+      if (interaction.customId === 'audit_vc') return interaction.showModal(rangeModal('audit_vc_modal', 'ตรวจสอบ Team VC'));
+      if (interaction.customId === 'thread_links') {
+        return interaction.reply({ content: '🔗 **เลือก Source Room**\nบอทจะสแกน Threads ที่มีอยู่จริงในห้องนี้ แล้วให้เลือก Destination Room ในขั้นถัดไป', components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('link_source').setPlaceholder('เลือก Source Room').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))] });
       }
-      if (interaction.customId === 'cancel_complete') return interaction.update({ content: 'ยกเลิกแล้ว', components: [] });
+      if (interaction.customId.startsWith('staff_complete:')) {
+        const key = interaction.customId.slice('staff_complete:'.length), mapping = db.matches[key];
+        if (!mapping) return interaction.reply({ content: '❌ ไม่พบ Match ใน DB' });
+        if (mapping.completedAt) return interaction.reply({ content: `🔒 Match นี้ปิดไปแล้วโดย <@${mapping.completedBy}> เมื่อ <t:${Math.floor(new Date(mapping.completedAt).getTime()/1000)}:F>` });
+        return interaction.reply({ content: `⚠️ **ยืนยันการปิด Match**\n\n**${mapping.team1} VS ${mapping.team2}**\n\nต้องการยืนยันว่าแข่งเสร็จแล้วใช่หรือไม่?`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`confirm_complete:${key}`).setLabel('ยืนยัน').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('cancel_complete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))] });
+      }
+      if (interaction.customId === 'cancel_complete') return interaction.update({ content: '✅ ยกเลิกแล้ว', components: [] });
       if (interaction.customId.startsWith('confirm_complete:')) {
-        const key = interaction.customId.slice('confirm_complete:'.length); const mapping = db.matches[key];
+        const key = interaction.customId.slice('confirm_complete:'.length), mapping = db.matches[key];
         if (!mapping) return interaction.update({ content: '❌ ไม่พบ Match ใน DB', components: [] });
         if (mapping.completedAt) return interaction.update({ content: `🔒 ปิดไปแล้วโดย <@${mapping.completedBy}>`, components: [] });
         mapping.completedAt = new Date().toISOString(); mapping.completedBy = interaction.user.id;
         const thread = mapping.threadId ? await interaction.guild.channels.fetch(mapping.threadId).catch(() => null) : null;
         if (thread?.isThread?.()) await thread.setArchived(true).catch(() => {});
         saveDb();
-        if (mapping.boardChannelId && mapping.boardMessageId) {
-          const board = await getChannel(interaction.guild, mapping.boardChannelId);
-          const msg = board?.messages ? await board.messages.fetch(mapping.boardMessageId).catch(() => null) : null;
-          if (msg) await msg.edit({ content: staffBoardContent(interaction.guild, { round: mapping.round, pair: mapping.pair, team1: mapping.team1, team2: mapping.team2, time: mapping.time }, mapping), components: [completeButton(key, true)] }).catch(() => {});
-        }
-        return interaction.update({ content: `🔒 **แข่งขันเสร็จแล้ว**\nดำเนินการโดย <@${interaction.user.id}>\nเวลา <t:${Math.floor(new Date(mapping.completedAt).getTime() / 1000)}:F>\n\n🧵 Match Thread ถูก Archive แล้ว`, components: [] });
+        if (mapping.boardChannelId && mapping.boardMessageId) { const board = await getChannel(interaction.guild, mapping.boardChannelId); const msg = board?.messages ? await board.messages.fetch(mapping.boardMessageId).catch(() => null) : null; if (msg) await msg.edit({ content: staffBoardContent(interaction.guild, mapping, mapping), components: [completeButton(key, true)] }).catch(() => {}); }
+        return interaction.update({ content: `🔒 **แข่งขันเสร็จแล้ว**\nดำเนินการโดย <@${interaction.user.id}>\nเวลา <t:${Math.floor(new Date(mapping.completedAt).getTime()/1000)}:F>\n\n🧵 Match Thread ถูก Archive แล้ว`, components: [] });
       }
+      if (interaction.customId.startsWith('confirm_announce:')) {
+        const key = interaction.customId.slice('confirm_announce:'.length), p = pending.get(key);
+        if (!p || Date.now() - p.createdAt > 10*60*1000) return interaction.update({ content: '⚠️ Preview หมดอายุแล้ว กรุณากดปุ่มใหม่อีกครั้ง', components: [] });
+        const report = await inspectAnnouncementRange(interaction.guild, p.round, p.start, p.end);
+        const sent = await sendAnnouncementReport(interaction.guild, report, p.channelId, p.round);
+        pending.delete(key);
+        return interaction.update({ content: `📢 **ประกาศเสร็จแล้ว**\nห้อง: <#${p.channelId}>\nส่ง: **${sent.sent.length} กลุ่มเวลา**\n🟢 ประกาศเฉพาะ ${report.found.length} คู่ที่มี Thread`, components: [] });
+      }
+      if (interaction.customId.startsWith('confirm_delete:')) {
+        const [, mode, round, start, end] = interaction.customId.split(':');
+        const rows = getMatches(round, Number(start), Number(end)); let count = 0;
+        for (const m of rows) {
+          const key = matchKey(round, m.pair), mapping = db.matches[key];
+          if (mode === 'delete_threads') { const thread = mapping?.threadId ? await interaction.guild.channels.fetch(mapping.threadId).catch(() => null) : await resolveThread(interaction.guild, m, mapping?.parentChannelId || MATCH_THREAD_PARENT_ID); if (thread?.isThread?.()) { await thread.delete().catch(() => {}); count++; } if (mapping) { mapping.threadId=null; mapping.welcomePosted=false; mapping.vcLinksPosted=false; mapping.openIdPosted=false; } }
+          else { for (const id of [mapping?.vc1Id,mapping?.vc2Id]) { if (id) { const c=await interaction.guild.channels.fetch(id).catch(()=>null); if(c){await c.delete().catch(()=>{});count++;} } } if(mapping){mapping.vc1Id=null;mapping.vc2Id=null;} const cs=Math.floor((m.pair-1)/25)*25+1, ce=cs+24, cat=interaction.guild.channels.cache.find(c=>c.type===ChannelType.GuildCategory&&c.name===`${CATEGORY_PREFIX} คู่ ${cs}-${ce}`); if(cat){const children=interaction.guild.channels.cache.filter(c=>c.parentId===cat.id&&c.type===ChannelType.GuildVoice);if(children.size===0){await cat.delete().catch(()=>{});count++;}} }
+        }
+        saveDb(); return interaction.update({ content: `🗑️ ดำเนินการแล้ว: **${count} ห้อง**\nDB ถูกอัปเดตแล้ว`, components: [] });
+      }
+      if (interaction.customId === 'cancel_delete') return interaction.update({ content: '✅ ยกเลิกแล้ว', components: [] });
     }
 
     if (interaction.isModalSubmit()) {
-      const custom = interaction.customId;
-      const round = interaction.fields.getTextInputValue('round').trim();
-      const range = interaction.fields.getTextInputValue('range').trim();
-      let start, end;
-      try { [start, end] = parseRange(range); } catch (e) { return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true }); }
-      if (custom === 'audit_vc_modal') {
-        await interaction.deferReply({ ephemeral: true });
-        const audit = await auditVcRange(interaction.guild, round, start, end);
-        const msgs = buildAuditMessages(interaction.guild, audit);
-        await interaction.editReply({ content: msgs[0] });
-        for (let i = 1; i < msgs.length; i++) await interaction.followUp({ content: msgs[i], ephemeral: true });
-        return;
-      }
-      if (custom === 'batch_modal') {
-        pending.set(interaction.user.id, { createdAt: Date.now(), round, start, end, mode: 'batch' });
-        return interaction.reply({ content: `🚀 **Batch** — Round ${round}, คู่ ${start}-${end}\n\nเลือกห้อง Match Thread และ Staff Board\n\nเรนจ์ตัวอย่าง: 1-32 หรือคู่เดียว 1-1`, ephemeral: true, components: [
-          new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('batch_thread').setPlaceholder('1/2 เลือกห้อง Match Threads').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)),
-          new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('batch_board').setPlaceholder('2/2 เลือกห้อง Staff Board').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText))
-        ]});
-      }
-      const modeMap = { threads_modal: 'threads', vc_modal: 'vc', update_threads_modal: 'update_threads', delete_threads_modal: 'delete_threads', delete_vc_modal: 'delete_vc' };
-      const mode = modeMap[custom];
-      if (!mode) return;
-      if (mode === 'update_threads') {
-        await interaction.deferReply({ ephemeral: true });
-        const results = await runRange(interaction.guild, round, start, end, { createThread: true, createVc: false, createBoard: false, announce: false, threadParentId: MATCH_THREAD_PARENT_ID });
-        return interaction.editReply({ content: resultSummary(results, `🔄 อัปเดต Match Threads — Round ${round}, คู่ ${start}-${end}`) });
-      }
-      if (mode === 'threads') {
-        pending.set(interaction.user.id, { createdAt: Date.now(), round, start, end, mode: 'threads' });
-        return interaction.reply({ content: `🧵 **สร้างเฉพาะ Match Threads**\nRound ${round}, คู่ ${start}-${end}\nเลือกห้องเก็บ Threads`, ephemeral: true, components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('threads_parent').setPlaceholder('เลือกห้อง Match Threads').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))] });
-      }
-      if (mode === 'vc') {
-        await interaction.deferReply({ ephemeral: true });
-        const results = await runRange(interaction.guild, round, start, end, { createThread: false, createVc: true, createBoard: false, announce: false });
-        return interaction.editReply({ content: resultSummary(results, `🔊 สร้างเฉพาะ Team VC — Round ${round}, คู่ ${start}-${end}`) });
-      }
-      if (mode === 'delete_threads' || mode === 'delete_vc') {
-        return interaction.reply({ content: `⚠️ **ยืนยันการลบ**\nRound ${round}, คู่ ${start}-${end}\n\n${mode === 'delete_threads' ? 'จะลบเฉพาะ Match Threads' : 'จะลบ VC + Category ที่เกี่ยวข้อง'}\n\nแน่ใจหรือไม่?`, ephemeral: true, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`confirm_delete:${mode}:${round}:${start}:${end}`).setLabel('ยืนยัน').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('cancel_delete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))] });
-      }
+      const custom=interaction.customId, round=interaction.fields.getTextInputValue('round').trim();
+      const range=interaction.fields.getTextInputValue('range').trim(); let start,end;
+      try {[start,end]=parseRange(range);} catch(e){return interaction.reply({content:`❌ ${e.message}`});}
+      if(custom==='audit_vc_modal'){await interaction.deferReply();const audit=await auditVcRange(interaction.guild,round,start,end);const msgs=buildAuditMessages(interaction.guild,audit);await interaction.editReply({content:msgs[0]});for(let i=1;i<msgs.length;i++)await interaction.followUp({content:msgs[i]});return;}
+      if(custom==='batch_modal'){pending.set(interaction.user.id,{createdAt:Date.now(),round,start,end,mode:'batch'});return interaction.reply({content:`🚀 **Batch** — Round ${round}, คู่ ${start}-${end}\n\nเลือกห้อง Match Threads และ Staff Board`,components:[new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('batch_thread').setPlaceholder('1/2 เลือกห้อง Match Threads').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement)),new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('batch_board').setPlaceholder('2/2 เลือกห้อง Staff Board').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText))]});}
+      const modeMap={threads_modal:'threads',vc_modal:'vc',announce_modal:'announce',update_threads_modal:'update_threads',delete_threads_modal:'delete_threads',delete_vc_modal:'delete_vc'};const mode=modeMap[custom];if(!mode)return;
+      if(mode==='announce'){pending.set(interaction.user.id,{createdAt:Date.now(),round,start,end,mode:'announce'});return interaction.reply({content:`📢 **เลือกห้องประกาศ**\nRound ${round}, คู่ ${start}-${end}`,components:[new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('announce_channel').setPlaceholder('เลือกห้องประกาศ').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement))]});}
+      if(mode==='update_threads'){await interaction.deferReply();const results=await runRange(interaction.guild,round,start,end,{createThread:true,createVc:false,createBoard:false,announce:false,threadParentId:MATCH_THREAD_PARENT_ID});return interaction.editReply({content:resultSummary(results,`🔄 อัปเดต Match Threads — Round ${round}, คู่ ${start}-${end}`)});}
+      if(mode==='threads'){pending.set(interaction.user.id,{createdAt:Date.now(),round,start,end,mode:'threads'});return interaction.reply({content:`🧵 **เลือกห้องเก็บ Threads**\nRound ${round}, คู่ ${start}-${end}`,components:[new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('threads_parent').setPlaceholder('เลือกห้อง Match Threads').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement))]});}
+      if(mode==='vc'){await interaction.deferReply();const results=await runRange(interaction.guild,round,start,end,{createThread:false,createVc:true,createBoard:false,announce:false});return interaction.editReply({content:resultSummary(results,`🔊 สร้างเฉพาะ Team VC — Round ${round}, คู่ ${start}-${end}`)});}
+      if(mode==='delete_threads'||mode==='delete_vc')return interaction.reply({content:`⚠️ **ยืนยันการลบ**\nRound ${round}, คู่ ${start}-${end}\n\n${mode==='delete_threads'?'จะลบเฉพาะ Match Threads':'จะลบ VC + Category ที่เกี่ยวข้อง'}\n\nแน่ใจหรือไม่?`,components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`confirm_delete:${mode}:${round}:${start}:${end}`).setLabel('ยืนยัน').setStyle(ButtonStyle.Danger),new ButtonBuilder().setCustomId('cancel_delete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))]});
     }
 
     if (interaction.isChannelSelectMenu()) {
-      const p = pending.get(interaction.user.id);
-      if (!p || Date.now() - p.createdAt > 10 * 60 * 1000) return interaction.update({ content: '⚠️ รายการหมดอายุแล้ว กดปุ่มใหม่อีกครั้ง', components: [] });
-      if (interaction.customId === 'batch_thread') { p.threadParentId = interaction.values[0]; pending.set(interaction.user.id, p); return interaction.update({ content: `Match Thread: <#${p.threadParentId}>\n\nเลือก Staff Board`, components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('batch_board').setPlaceholder('2/2 เลือกห้อง Staff Board').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText))], ephemeral: true }); }
-      if (interaction.customId === 'batch_board') {
-        p.boardChannelId = interaction.values[0];
-        await interaction.update({ content: `⏳ กำลังสร้าง Round ${p.round}, คู่ ${p.start}-${p.end}...`, components: [], ephemeral: true });
-        const results = await runRange(interaction.guild, p.round, p.start, p.end, { createVc: true, createThread: true, createBoard: true, announce: true, threadParentId: p.threadParentId, boardChannelId: p.boardChannelId });
-        await announceGrouped(interaction.guild, results);
-        return interaction.editReply({ content: resultSummary(results, `🚀 Match Batch — Round ${p.round}, คู่ ${p.start}-${p.end}`) });
-      }
-      if (interaction.customId === 'threads_parent') {
-        p.threadParentId = interaction.values[0];
-        await interaction.update({ content: `⏳ กำลังสร้าง Thread อย่างเดียว Round ${p.round}, คู่ ${p.start}-${p.end}...`, components: [], ephemeral: true });
-        const results = await runRange(interaction.guild, p.round, p.start, p.end, { createVc: false, createThread: true, createBoard: false, announce: false, threadParentId: p.threadParentId });
-        return interaction.editReply({ content: resultSummary(results, `🧵 Match Threads — Round ${p.round}, คู่ ${p.start}-${p.end}`) });
-      }
+      const p=pending.get(interaction.user.id);if(!p||Date.now()-p.createdAt>10*60*1000)return interaction.update({content:'⚠️ รายการหมดอายุแล้ว กดปุ่มใหม่อีกครั้ง',components:[]});
+      if(interaction.customId==='batch_thread'){p.threadParentId=interaction.values[0];pending.set(interaction.user.id,p);return interaction.update({content:`Match Thread: <#${p.threadParentId}>\n\nเลือก Staff Board`,components:[new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('batch_board').setPlaceholder('2/2 เลือกห้อง Staff Board').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText))]});}
+      if(interaction.customId==='batch_board'){p.boardChannelId=interaction.values[0];await interaction.update({content:`⏳ กำลังสร้าง Round ${p.round}, คู่ ${p.start}-${p.end}...`,components:[]});const results=await runRange(interaction.guild,p.round,p.start,p.end,{createVc:true,createThread:true,createBoard:true,announce:false,threadParentId:p.threadParentId,boardChannelId:p.boardChannelId});const good=results.filter(x=>x.status==='ok').length;return interaction.editReply({content:resultSummary(results,`🚀 Match Batch — Round ${p.round}, คู่ ${p.start}-${p.end}`)+`\n\n📢 การประกาศยังไม่ถูกส่งอัตโนมัติ — ใช้ปุ่ม **📢 ประกาศ Match Threads** เพื่อ Preview และยืนยันก่อนส่ง`});}
+      if(interaction.customId==='announce_channel'){p.channelId=interaction.values[0];const report=await inspectAnnouncementRange(interaction.guild,p.round,p.start,p.end);const key=`announce:${interaction.user.id}:${Date.now()}`;pending.set(key,{createdAt:Date.now(),round:p.round,start:p.start,end:p.end,channelId:p.channelId});pending.delete(interaction.user.id);return interaction.update({content:announcementPreviewText(p.round,p.start,p.end,report,p.channelId),components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`confirm_announce:${key}`).setLabel('ยืนยันประกาศ').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('cancel_delete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))]});}
+      if(interaction.customId==='threads_parent'){p.threadParentId=interaction.values[0];await interaction.update({content:`⏳ กำลังสร้าง Thread อย่างเดียว Round ${p.round}, คู่ ${p.start}-${p.end}...`,components:[]});const results=await runRange(interaction.guild,p.round,p.start,p.end,{createVc:false,createThread:true,createBoard:false,announce:false,threadParentId:p.threadParentId});return interaction.editReply({content:resultSummary(results,`🧵 Match Threads — Round ${p.round}, คู่ ${p.start}-${p.end}`)});}
+      if(interaction.customId==='link_source'){const sourceId=interaction.values[0];const scan=await scanThreadLinks(interaction.guild,sourceId);pending.set(interaction.user.id,{createdAt:Date.now(),mode:'link_threads',scan});return interaction.update({content:`🔎 สแกน Source สำเร็จ: <#${sourceId}>\nพบ Threads **${scan.results.length}** รายการ\n\nเลือก Destination Room ที่ต้องการส่งรายการ`,components:[new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('link_destination').setPlaceholder('เลือก Destination Room').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement))]});}
+      if(interaction.customId==='link_destination'){const p=pending.get(interaction.user.id);if(!p||p.mode!=='link_threads')return interaction.update({content:'⚠️ รายการหมดอายุแล้ว',components:[]});const msgs=buildThreadLinkMessages(interaction.guild,p.scan);const dest=await getChannel(interaction.guild,interaction.values[0]);if(!dest)return interaction.update({content:'❌ ไม่พบ Destination Room',components:[]});for(const msg of msgs)await dest.send({content:msg});pending.delete(interaction.user.id);return interaction.update({content:`🔗 ส่งรายการ Link Threads เรียบร้อย\nSource: <#${p.scan.source.id}>\nDestination: <#${dest.id}>\nข้อความ: **${msgs.length}**`,components:[]});}
     }
-
-    if (interaction.isButton() && interaction.customId.startsWith('confirm_delete:')) {
-      const [, mode, round, start, end] = interaction.customId.split(':');
-      const rows = getMatches(round, Number(start), Number(end)); let count = 0;
-      for (const m of rows) {
-        const key = matchKey(round, m.pair); const mapping = db.matches[key];
-        if (mode === 'delete_threads') {
-          const thread = mapping?.threadId ? await interaction.guild.channels.fetch(mapping.threadId).catch(() => null) : await resolveThread(interaction.guild, m, mapping?.parentChannelId || MATCH_THREAD_PARENT_ID);
-          if (thread?.isThread?.()) { await thread.delete().catch(() => {}); count++; }
-          if (mapping) { delete mapping.threadId; mapping.welcomePosted = false; mapping.vcLinksPosted = false; mapping.openIdPosted = false; }
-        } else {
-          for (const id of [mapping?.vc1Id, mapping?.vc2Id]) { if (id) { const c = await interaction.guild.channels.fetch(id).catch(() => null); if (c) { await c.delete().catch(() => {}); count++; } } }
-          if (mapping) { mapping.vc1Id = null; mapping.vc2Id = null; }
-          const categoryStart = Math.floor((m.pair - 1) / 25) * 25 + 1;
-          const categoryEnd = categoryStart + 24;
-          const categoryName = `${CATEGORY_PREFIX} คู่ ${categoryStart}-${categoryEnd}`;
-          const category = interaction.guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === categoryName);
-          if (category) {
-            const children = interaction.guild.channels.cache.filter(c => c.parentId === category.id && c.type === ChannelType.GuildVoice);
-            if (children.size === 0) { await category.delete().catch(() => {}); count++; }
-          }
-        }
-      }
-      saveDb();
-      return interaction.update({ content: `🗑️ ดำเนินการแล้ว: **${count} ห้อง**\nDB ถูกอัปเดตแล้ว`, components: [] });
-    }
-    if (interaction.isButton() && interaction.customId === 'cancel_delete') return interaction.update({ content: 'ยกเลิกแล้ว', components: [] });
-  } catch (error) {
-    console.error(error);
-    const content = `❌ ${error.message || error}`;
-    if (interaction.deferred) return interaction.editReply({ content }).catch(() => {});
-    if (interaction.replied) return interaction.followUp({ content, ephemeral: true }).catch(() => {});
-    return interaction.reply({ content, ephemeral: true }).catch(() => {});
-  }
+  } catch(error){console.error(error);const content=`❌ ${error.message||error}`;if(interaction.deferred)return interaction.editReply({content}).catch(()=>{});if(interaction.replied)return interaction.followUp({content}).catch(()=>{});return interaction.reply({content});}
 });
-
 client.login(TOKEN);
