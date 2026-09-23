@@ -1,10 +1,18 @@
 {
   "name": "rov-svg-csv-discord-bot",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "description": "RoV tournament Discord bot using CSV as the primary match pipeline; no Challonge API calls.",
   "main": "src/index.js",
-  "scripts": {"start": "node src/index.js"},
-  "engines": {"node": ">=20.0.0"},
-  "dependencies": {"discord.js": "^14.25.1", "dotenv": "^16.6.1", "xlsx": "^0.18.5"}
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "dotenv": "^16.6.1",
+    "xlsx": "^0.18.5"
+  }
 }
