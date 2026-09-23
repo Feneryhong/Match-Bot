@@ -24,7 +24,7 @@ const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
-const BUILD_ID = 'v3.3.9-R512-THREAD-GLOBAL-RESOLVE-TIMEOUTFIX';
+const BUILD_ID = 'v3.3.10-R512-TEAM-NAME-NORMALIZE';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -87,6 +87,18 @@ function norm(value) {
     .replace(/[“”‘’'`]/g, '')
     .replace(/[._-]+/g, ' ')
     .replace(/\s+/g, ' ')
+    .trim();
+}
+// Team-name matching key: keep letters/numbers (including Thai and Latin Unicode),
+// but ignore emoji, gender symbols, variation selectors, ZWJ, punctuation and spacing.
+// This prevents names such as `FairyFury ?‍♀️` from failing roster/VC/thread matching
+// because of invisible Unicode/emoji sequences while preserving the real display name.
+function normTeam(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\u200B-\u200D\uFEFF\uFE0E\uFE0F]/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '')
     .trim();
 }
 function compact(value) { return norm(value).replace(/[^a-z0-9ก-๙]+/g, ''); }
@@ -172,7 +184,7 @@ function readOpenId() {
     const player = String(playerCol ? row[playerCol] || '' : '').trim();
     const openId = String(row[oidCol] || '').trim();
     if (!team || !openId) continue;
-    const key = norm(team);
+    const key = normTeam(team);
     if (!map.has(key)) map.set(key, { teamName: team, players: [] });
     map.get(key).players.push({ playerName: player || 'ผู้เล่น', openId });
   }
@@ -193,7 +205,7 @@ function openIdChunks(teamNames) {
   const blocks = ['🪪 **ข้อมูลผู้เข้าแข่งขัน**'];
   for (const team of [...new Set(teamNames.filter(Boolean))]) {
     if (isTbd(team)) { blocks.push('**TBD**\n⚠️ ยังไม่มีข้อมูลทีม'); continue; }
-    const data = openIds.get(norm(team));
+    const data = openIds.get(normTeam(team));
     if (!data) { blocks.push(`⚠️ **ไม่พบข้อมูล Open ID ของ ${team} ใน CSV**`); continue; }
     blocks.push(`**${data.teamName}**\n${data.players.map(p => `${p.playerName} — \`${p.openId}\``).join('\n')}`);
   }
@@ -242,15 +254,15 @@ async function buildRosterAudit(guild, requestedTeams, preloadedMessages = null)
 
   const result = new Map();
   for (const team of requestedTeams) {
-    if (isTbd(team)) { result.set(norm(team), { status: 'tbd', teamName: team }); continue; }
-    const teamKey = norm(team);
+    if (isTbd(team)) { result.set(normTeam(team), { status: 'tbd', teamName: team }); continue; }
+    const teamKey = normTeam(team);
 
     // IMPORTANT: choose the latest message mentioning this team BEFORE deciding format.
     // This prevents an old valid message from being used when the newest message is malformed.
     const matchingMessages = messages
       .filter(m => {
         const parsed = parseRosterMessage(m);
-        if (parsed?.format === 'valid' && norm(parsed.teamName) === teamKey) return true;
+        if (parsed?.format === 'valid' && normTeam(parsed.teamName) === teamKey) return true;
         const content = String(m.content || '');
         const compactContent = compact(content);
         const compactTeam = compact(team);
@@ -264,7 +276,7 @@ async function buildRosterAudit(guild, requestedTeams, preloadedMessages = null)
     const latestParsed = latestRaw ? parseRosterMessage(latestRaw) : null;
 
     const exactValid = valid
-      .filter(x => norm(x.teamName) === teamKey)
+      .filter(x => normTeam(x.teamName) === teamKey)
       .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
     if (latestRaw && latestParsed?.format === 'valid' && norm(latestParsed.teamName) === teamKey) {
@@ -332,7 +344,7 @@ function vcNameMatches(team, channelName, pair) {
   return null;
 }
 function vcTeamNameMatches(team, channelName) {
-  return stripVcDecorations(channelName) === norm(team);
+  return normTeam(stripVcDecorations(channelName)) === normTeam(team);
 }
 async function allVoiceChannels(guild) {
   await guild.channels.fetch();
@@ -366,7 +378,7 @@ async function auditVcRange(guild, round, start, end) {
   for (const match of matchRows) {
     for (const slot of ['team1', 'team2']) {
       const team = match[slot];
-      const key = norm(team);
+      const key = normTeam(team);
       const roster = rosterAudit.result.get(key);
       const entry = { round, pair: match.pair, team, slot, roster, vcCandidates: [], relatedVcCandidates: [], dbVc: null, status: null };
       if (isTbd(team)) { entry.status = 'tbd'; entries.push(entry); continue; }
@@ -472,7 +484,7 @@ function buildAuditMessages(guild, audit) {
 
 function matchKey(round, pair) { return `${round}:${pair}`; }
 function threadName(match) { return `${match.team1} VS ${match.team2}`.slice(0, 100); }
-function threadFindKey(name) { return norm(name); }
+function threadFindKey(name) { return normTeam(name); }
 async function findExistingThread(parent, match) {
   if (!parent?.threads) return null;
   const active = await parent.threads.fetchActive().catch(() => null);
@@ -614,8 +626,8 @@ async function runRange(guild, round, start, end, options = {}) {
     try {
       let vc1 = mapping.vc1Id ? await guild.channels.fetch(mapping.vc1Id).catch(() => null) : null;
       let vc2 = mapping.vc2Id ? await guild.channels.fetch(mapping.vc2Id).catch(() => null) : null;
-      const r1 = rosterAudit?.result.get(norm(match.team1));
-      const r2 = rosterAudit?.result.get(norm(match.team2));
+      const r1 = rosterAudit?.result.get(normTeam(match.team1));
+      const r2 = rosterAudit?.result.get(normTeam(match.team2));
       if (options.createVc) {
         const a = await createOrGetVc(guild, match, match.team1, 'team1', r1, voices);
         const b = await createOrGetVc(guild, match, match.team2, 'team2', r2, voices);
@@ -798,7 +810,7 @@ async function scanThreadLinks(guild, sourceChannelId) {
   for (const thread of threads) {
     const parsed = parseStrictThreadName(thread.name);
     if (!parsed) { results.push({ status: 'invalid_thread', thread }); continue; }
-    const pairKey = `${norm(parsed.team1)}\u0000${norm(parsed.team2)}`;
+    const pairKey = `${normTeam(parsed.team1)}\u0000${normTeam(parsed.team2)}`;
     if (!parsedGroups.has(pairKey)) parsedGroups.set(pairKey, []);
     parsedGroups.get(pairKey).push(thread);
   }
