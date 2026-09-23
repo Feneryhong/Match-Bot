@@ -94,6 +94,8 @@ function discordUrl(guildId, channelId, messageId = '') {
   return `https://discord.com/channels/${guildId}/${channelId}${messageId ? `/${messageId}` : ''}`;
 }
 function linkChannel(guildId, channelId, label) { return channelId ? `[${label || 'เปิดห้อง'}](${discordUrl(guildId, channelId)})` : '—'; }
+// Use Discord channel mentions in Link Match output to avoid rich Discord VC/channel cards.
+function mentionChannel(channelId) { return channelId ? `<#${channelId}>` : '—'; }
 function linkMessage(guildId, channelId, messageId, label) { return messageId ? `[${label || 'เปิดข้อความล่าสุด'}](${discordUrl(guildId, channelId, messageId)})` : '—'; }
 
 function staff(interaction) {
@@ -746,19 +748,19 @@ function buildThreadLinkMessages(guild, scan) {
   const blocks = [`🔗 **Link Threads**`, `Source Room: <#${scan.source.id}>`, `ตรวจพบ Threads: **${scan.results.length}**`, '', 'กติกาชื่อ Thread: `XXX vs XXX` เท่านั้น'];
   for (const r of scan.results) {
     if (r.status === 'invalid_thread') {
-      blocks.push(`⚠️ **Thread Format ไม่ถูกต้อง**\nชื่อ: ${r.thread.name}\nthread : ${linkChannel(guild.id, r.thread.id, 'link')}`);
+      blocks.push(`⚠️ **Thread Format ไม่ถูกต้อง**\nชื่อ: ${r.thread.name}\nthread : ${mentionChannel(r.thread.id)}`);
       continue;
     }
     if (r.status === 'duplicate_thread') {
       blocks.push(`⚠️ **พบ Thread ซ้ำ**\n${r.team1} vs ${r.team2}`);
-      for (const t of r.threads) blocks.push(`thread : ${linkChannel(guild.id, t.id, 'link')}`);
+      for (const t of r.threads) blocks.push(`thread : ${mentionChannel(t.id)}`);
       continue;
     }
-    const lines = [`${r.team1} vs ${r.team2}`, `thread : ${linkChannel(guild.id, r.thread.id, 'link')}`];
+    const lines = [`${r.team1} vs ${r.team2}`, `thread : ${mentionChannel(r.thread.id)}`];
     for (const v of r.vcResults) {
       if (v.candidates.length === 0) lines.push(`VC ${v.team} : ❌ ไม่พบ`);
-      else if (v.candidates.length === 1) lines.push(`VC ${v.team} : ${linkChannel(guild.id, v.candidates[0].id, 'link')}`);
-      else { lines.push(`VC ${v.team} : ⚠️ พบ ${v.candidates.length} ห้อง`); for (const c of v.candidates) lines.push(`• ${c.name} : ${linkChannel(guild.id, c.id, 'link')}`); }
+      else if (v.candidates.length === 1) lines.push(`VC ${v.team} : ${mentionChannel(v.candidates[0].id)}`);
+      else { lines.push(`VC ${v.team} : ⚠️ พบ ${v.candidates.length} ห้อง`); for (const c of v.candidates) lines.push(`• ${c.name} : ${mentionChannel(c.id)}`); }
     }
     blocks.push(lines.join('\n'));
   }
