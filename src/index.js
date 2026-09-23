@@ -24,6 +24,7 @@ const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
+const BUILD_ID = 'v3.3.6-R512-UNIFIED-RANGE';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -769,11 +770,30 @@ function buildThreadLinkMessages(guild, scan) {
 
 
 function parseRange(value) {
-  const raw = String(value || '').trim();
-  const match = raw.match(/^(\d+)\s*-\s*(\d+)$/);
-  if (!match) throw new Error('รูปแบบเรนจ์ไม่ถูกต้อง\nกรุณากำหนดเรนจ์ เช่น `1-32`\nหากต้องการสร้างเพียง 1 คู่ ให้ใส่ `1-1` หรือ `32-32`');
-  const start = Number(match[1]); const end = Number(match[2]);
-  if (start < 1 || end < start || end - start + 1 > 256) throw new Error('เรนจ์ไม่ถูกต้อง: จุดเริ่มต้องไม่น้อยกว่า 1 และช่วงต้องไม่เกิน 256 คู่');
+  // Discord modal input can contain Unicode dash characters after copy/paste.
+  // Normalize all common dash variants to ASCII '-' before parsing.
+  const raw = String(value ?? '').trim();
+  const normalized = raw
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212\uFE58\uFE63\uFF0D]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const match = normalized.match(/^(\d+)\s*-\s*(\d+)$/);
+  if (!match) {
+    throw new Error(
+      'รูปแบบเรนจ์ไม่ถูกต้อง\n' +
+      'กรุณากำหนดเรนจ์ เช่น `1-32` หรือ `87-107`\n' +
+      'หากต้องการสร้างเพียง 1 คู่ ให้ใส่ `1-1`'
+    );
+  }
+
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > 256) {
+    throw new Error('เรนจ์ไม่ถูกต้อง: คู่ต้องอยู่ในช่วง 1-256 และจุดเริ่มต้องไม่มากกว่าจุดจบ');
+  }
+
   return [start, end];
 }
 function rangeModal(customId, title) {
@@ -788,7 +808,7 @@ function batchModal() { return rangeModal('batch_modal', 'สร้าง Match 
 
 function panel() {
   return {
-    content: `🏆 **RoV Tournament CSV Pipeline — ${TOURNAMENT_NAME}**\n\n**Source:** CSV\n**Challonge API:** ปิด\n**Roster:** <#${ROSTER_CHANNEL_ID}> (ใช้ข้อความล่าสุดของแต่ละทีมเท่านั้น)\n**Announcement:** เลือกห้องทุกครั้งที่กดประกาศ
+    content: `🏆 **RoV Tournament CSV Pipeline — ${TOURNAMENT_NAME}**\n**Build:** ${BUILD_ID}\n\n**Source:** CSV\n**Challonge API:** ปิด\n**Roster:** <#${ROSTER_CHANNEL_ID}> (ใช้ข้อความล่าสุดของแต่ละทีมเท่านั้น)\n**Announcement:** เลือกห้องทุกครั้งที่กดประกาศ
 **ผู้มีสิทธิ์:** ${ALLOWED_USER_IDS.length ? ALLOWED_USER_IDS.map(id => `<@${id}>`).join(', ') : 'ยังไม่ได้กำหนด'}`,
     components: [
       new ActionRowBuilder().addComponents(
@@ -890,7 +910,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isModalSubmit()) {
       const custom=interaction.customId, round=interaction.fields.getTextInputValue('round').trim();
       const range=interaction.fields.getTextInputValue('range').trim(); let start,end;
-      try {[start,end]=parseRange(range);} catch(e){return interaction.reply({content:`❌ ${e.message}`});}
+      try {[start,end]=parseRange(range);} catch(e){return interaction.reply({content:`❌ ${e.message}\n\n🧩 Build: **${BUILD_ID}**\n📥 ค่าที่ได้รับ: \`${range.replace(/`/g, '')}\``});}
       if(custom==='audit_vc_modal'){await interaction.deferReply();const audit=await auditVcRange(interaction.guild,round,start,end);const msgs=buildAuditMessages(interaction.guild,audit);await interaction.editReply({content:msgs[0]});for(let i=1;i<msgs.length;i++)await interaction.followUp({content:msgs[i]});return;}
       if(custom==='batch_modal'){pending.set(interaction.user.id,{createdAt:Date.now(),round,start,end,mode:'batch'});return interaction.reply({content:`🚀 **Batch** — Round ${round}, คู่ ${start}-${end}\n\nเลือกห้อง Match Threads และ Staff Board`,components:[new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('batch_thread').setPlaceholder('1/2 เลือกห้อง Match Threads').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement)),new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('batch_board').setPlaceholder('2/2 เลือกห้อง Staff Board').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText))]});}
       const modeMap={threads_modal:'threads',vc_modal:'vc',announce_modal:'announce',update_threads_modal:'update_threads',delete_threads_modal:'delete_threads',delete_vc_modal:'delete_vc'};const mode=modeMap[custom];if(!mode)return;
