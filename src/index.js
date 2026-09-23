@@ -24,7 +24,7 @@ const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
-const BUILD_ID = 'v3.3.10-R512-TEAM-NAME-NORMALIZE';
+const BUILD_ID = 'v3.3.11-R512-ROSTER-FLEX';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -213,24 +213,57 @@ function openIdChunks(teamNames) {
   return splitDiscordText(blocks);
 }
 
-function parseRosterMessage(message) {
-  const content = String(message.content || '');
+function rosterMessageText(message) {
+  const parts = [String(message?.content || '')];
+  for (const embed of (message?.embeds || [])) {
+    if (embed?.title) parts.push(String(embed.title));
+    if (embed?.description) parts.push(String(embed.description));
+    for (const field of (embed?.fields || [])) {
+      if (field?.name) parts.push(String(field.name));
+      if (field?.value) parts.push(String(field.value));
+    }
+    if (embed?.footer?.text) parts.push(String(embed.footer.text));
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
+function parseRosterMessage(message, expectedTeam = '') {
+  const content = String(message?.content || '');
+  const searchable = rosterMessageText(message);
+
+  // Preferred format: `Team : TEAM NAME` (kept for backwards compatibility).
   const match = content.match(/^\s*Team\s*:\s*(.*?)\s*$/im);
-  if (!match) return null;
-  const rawTeam = match[1].trim();
-  if (!rawTeam) return { format: 'invalid', reason: 'พบ `Team :` แต่ไม่มีชื่อทีม' };
-  const mentionedUserIds = [...message.mentions.users.keys()];
+  let rawTeam = match?.[1]?.trim() || '';
+
+  // More tolerant fallback for the actual Roster channel:
+  // if the expected team name appears in the latest roster message (including
+  // embed text), accept it even when the message does not contain `Team :`.
+  // We still require an exact normalized team-name match, so unrelated roster
+  // messages are not accepted accidentally.
+  if (!rawTeam && expectedTeam && normTeam(searchable) === normTeam(expectedTeam)) {
+    rawTeam = expectedTeam;
+  }
+
+  if (!rawTeam && expectedTeam && normTeam(searchable).includes(normTeam(expectedTeam))) {
+    rawTeam = expectedTeam;
+  }
+
+  if (!rawTeam) return null;
+
+  const mentionedUserIds = [...(message?.mentions?.users?.keys?.() || [])];
   return {
     format: 'valid',
     teamName: rawTeam,
-    teamKey: norm(rawTeam),
+    teamKey: normTeam(rawTeam),
     messageId: message.id,
     channelId: message.channelId,
     createdTimestamp: message.createdTimestamp,
     authorId: message.author?.id || null,
     authorTag: message.author?.tag || message.author?.username || message.author?.id || 'Unknown',
     mentionedUserIds,
-    content
+    content,
+    sourceText: searchable,
+    inferredFromExpectedTeam: !match
   };
 }
 async function fetchAllMessages(channel) {
@@ -249,44 +282,33 @@ async function buildRosterAudit(guild, requestedTeams, preloadedMessages = null)
   const channel = await getChannel(guild, ROSTER_CHANNEL_ID);
   if (!channel || channel.type !== ChannelType.GuildText) throw new Error('ไม่พบ Team Roster Channel หรือ Channel ไม่ใช่ Text Channel');
   const messages = preloadedMessages || await fetchAllMessages(channel);
-  const all = messages.map(parseRosterMessage).filter(Boolean);
-  const valid = all.filter(x => x.format === 'valid');
 
   const result = new Map();
   for (const team of requestedTeams) {
     if (isTbd(team)) { result.set(normTeam(team), { status: 'tbd', teamName: team }); continue; }
     const teamKey = normTeam(team);
 
-    // IMPORTANT: choose the latest message mentioning this team BEFORE deciding format.
-    // This prevents an old valid message from being used when the newest message is malformed.
+    // Find the latest message that actually contains this exact team name.
+    // The latest matching message wins, regardless of whether it uses the old
+    // `Team :` format. This makes the audit compatible with the current Roster
+    // messages while preserving the "latest message only" rule.
     const matchingMessages = messages
-      .filter(m => {
-        const parsed = parseRosterMessage(m);
-        if (parsed?.format === 'valid' && normTeam(parsed.teamName) === teamKey) return true;
-        const content = String(m.content || '');
-        const compactContent = compact(content);
-        const compactTeam = compact(team);
-        if (compactTeam.length < 3 || !compactContent.includes(compactTeam)) return false;
-        const lines = content.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-        return /\bteam\b/i.test(content) || lines.some(line => compact(line) === compactTeam);
-      })
+      .filter(m => normTeam(rosterMessageText(m)).includes(teamKey))
       .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
     const latestRaw = matchingMessages[0] || null;
-    const latestParsed = latestRaw ? parseRosterMessage(latestRaw) : null;
+    const latestParsed = latestRaw ? parseRosterMessage(latestRaw, team) : null;
 
-    const exactValid = valid
-      .filter(x => normTeam(x.teamName) === teamKey)
-      .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
-
-    if (latestRaw && latestParsed?.format === 'valid' && norm(latestParsed.teamName) === teamKey) {
+    if (latestRaw && latestParsed?.format === 'valid' && normTeam(latestParsed.teamName) === teamKey) {
       const item = { status: 'found', teamName: team, roster: latestParsed };
-      if (exactValid.length > 1) item.duplicateHistory = exactValid;
-      if (!latestParsed.mentionedUserIds.length) item.formatIssue = 'ไม่พบ @mention สมาชิกในข้อความล่าสุด';
+      // @mentions are optional. The roster message author is itself a valid
+      // access identity and is always included in rosterMemberIds().
       result.set(teamKey, item);
       continue;
     }
 
+    // Do not silently fall back to an older message when a newer matching
+    // message exists. Report the latest one instead.
     if (latestRaw) {
       result.set(teamKey, {
         status: 'format_invalid',
@@ -296,17 +318,13 @@ async function buildRosterAudit(guild, requestedTeams, preloadedMessages = null)
           channelId: latestRaw.channelId,
           createdTimestamp: latestRaw.createdTimestamp,
           authorId: latestRaw.author?.id || null,
-          content: String(latestRaw.content || '')
-        },
-        oldValid: exactValid[0] || null
+          content: rosterMessageText(latestRaw)
+        }
       });
       continue;
     }
 
-    const candidates = valid.filter(x => compact(x.teamName).includes(compact(team)) || compact(team).includes(compact(x.teamName)));
-    if (candidates.length === 1) result.set(teamKey, { status: 'similar', teamName: team, roster: candidates[0], candidates });
-    else if (candidates.length > 1) result.set(teamKey, { status: 'ambiguous', teamName: team, candidates });
-    else result.set(teamKey, { status: 'missing', teamName: team });
+    result.set(teamKey, { status: 'missing', teamName: team });
   }
 
   return { channel, result, messageCount: messages.length, messages };
