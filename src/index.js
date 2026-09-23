@@ -26,7 +26,6 @@ const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
 const BUILD_ID = 'v3.3.13-R512-SEND-THREAD-MODAL';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
-const MESSAGE_TARGET_CHANNEL_IDS = (env.MESSAGE_TARGET_CHANNEL_IDS || '').split(',').map(x => x.trim()).filter(Boolean).slice(0, 4);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
 if (!ROSTER_CHANNEL_ID) throw new Error('Missing ROSTER_CHANNEL_ID');
@@ -953,63 +952,63 @@ function sendThreadModal() {
   );
   return modal;
 }
-async function configuredMessageChannels(guild) {
-  const channels = [];
-  for (const id of MESSAGE_TARGET_CHANNEL_IDS) {
-    const ch = await getChannel(guild, id);
-    if (ch && [ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(ch.type)) channels.push(ch);
-  }
-  return channels;
-}
-function messageChannelSelect(channels) {
-  const menu = new StringSelectMenuBuilder().setCustomId('send_thread_channel').setPlaceholder('เลือกห้องที่จะส่งข้อความ').setMinValues(1).setMaxValues(1);
-  menu.addOptions(channels.map(ch => ({ label: ch.name.slice(0,100), value: ch.id, description: `ส่งเข้า Match Threads ใน #${ch.name}`.slice(0,100) })));
+function messageChannelSelect() {
+  const menu = new ChannelSelectMenuBuilder()
+    .setCustomId('send_thread_channels')
+    .setPlaceholder('เลือกห้องที่จะส่งข้อความ (สูงสุด 4 ห้อง)')
+    .setMinValues(1)
+    .setMaxValues(4)
+    .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
   return new ActionRowBuilder().addComponents(menu);
 }
-async function resolveThreadIdInChannel(guild, channelId, threadId) {
-  const channel = await getChannel(guild, channelId);
-  if (!channel) return null;
-  const threads = await fetchThreadsFromSourceRoom(channel);
-  return threads.find(t => t.id === threadId) || null;
-}
-async function sendMessageToThreadTargets(guild, channelId, threadId, message) {
-  const channel = await getChannel(guild, channelId);
-  if (!channel) throw new Error('ไม่พบ Channel ที่เลือก');
-  const threads = await fetchThreadsFromSourceRoom(channel);
-  let targets;
-  if (threadId) {
-    const target = threads.find(t => t.id === threadId);
-    if (!target) throw new Error('ไม่พบ Thread ID นี้ในห้องที่เลือก');
-    targets = [target];
-  } else {
-    targets = threads;
-  }
-  const sent = [], failed = [];
-  for (const thread of targets) {
-    try {
-      const msg = await thread.send({ content: message });
-      sent.push({ thread, messageId: msg.id });
-    } catch (e) {
-      failed.push({ thread, error: String(e?.message || e).slice(0, 180) });
+async function fetchSendThreadTargets(guild, channelIds, threadId) {
+  const channels = [];
+  const targets = [];
+  const seen = new Set();
+  for (const channelId of channelIds.slice(0, 4)) {
+    const channel = await getChannel(guild, channelId);
+    if (!channel || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(channel.type)) continue;
+    channels.push(channel);
+    const threads = await fetchThreadsFromSourceRoom(channel);
+    for (const thread of threads) {
+      if (threadId && thread.id !== threadId) continue;
+      if (seen.has(thread.id)) continue;
+      seen.add(thread.id);
+      targets.push({ thread, channel });
     }
   }
-  return { channel, targets, sent, failed };
+  return { channels, targets };
 }
-function sendThreadPreview(channel, threadId, message, threads) {
+async function sendMessageToThreadTargets(guild, channelIds, threadId, message) {
+  const { channels, targets } = await fetchSendThreadTargets(guild, channelIds, threadId);
+  if (!channels.length) throw new Error('ไม่พบ Channel ที่เลือก');
+  if (threadId && !targets.length) throw new Error(`ไม่พบ Thread ID \`${threadId}\` ในห้องที่เลือก`);
+  const sent = [], failed = [];
+  for (const item of targets) {
+    try {
+      const msg = await item.thread.send({ content: message });
+      sent.push({ ...item, messageId: msg.id });
+    } catch (e) {
+      failed.push({ ...item, error: String(e?.message || e).slice(0, 180) });
+    }
+  }
+  return { channels, targets, sent, failed };
+}
+function sendThreadPreview(channels, threadId, message, targets) {
   const lines = [
     '📨 **Preview ส่งข้อความเข้า Match Thread**',
-    `ห้อง: <#${channel.id}>`,
-    `โหมด: ${threadId ? `เฉพาะ Thread ID \`${threadId}\`` : `ทุก Thread ในห้อง (${threads.length} Threads)`}`,
+    `ห้องปลายทาง: ${channels.map(ch => `<#${ch.id}>`).join(', ')}`,
+    `โหมด: ${threadId ? `เฉพาะ Thread ID \`${threadId}\`` : `ทุก Thread ใน ${channels.length} ห้อง`}`,
     '',
     '**ข้อความที่จะส่ง:**',
     message,
     '',
-    `🧵 **จำนวน Thread ที่จะส่ง: ${threads.length}**`
+    `🧵 **จำนวน Thread ที่จะส่ง: ${targets.length}**`
   ];
-  if (threads.length && threads.length <= 20) {
-    lines.push('', ...threads.map((t,i) => `${i+1}. ${t.name} — <#${t.id}>`));
-  } else if (threads.length > 20) {
-    lines.push('', ...threads.slice(0,20).map((t,i) => `${i+1}. ${t.name}`), `…และอีก ${threads.length-20} Threads`);
+  if (targets.length && targets.length <= 20) {
+    lines.push('', ...targets.map((x,i) => `${i+1}. ${x.thread.name} — <#${x.thread.id}>`));
+  } else if (targets.length > 20) {
+    lines.push('', ...targets.slice(0,20).map((x,i) => `${i+1}. ${x.thread.name}`), `…และอีก ${targets.length-20} Threads`);
   }
   lines.push('', '⚠️ **ยังไม่ได้ส่งข้อความ** — กด Confirm เพื่อส่งจริง');
   return lines.join('\n');
@@ -1072,8 +1071,6 @@ client.on('interactionCreate', async interaction => {
       if (interaction.customId === 'vc_only') return interaction.showModal(rangeModal('vc_modal', 'สร้างเฉพาะ Team VC'));
       if (interaction.customId === 'announce') return interaction.showModal(rangeModal('announce_modal', 'ประกาศ Match Threads'));
       if (interaction.customId === 'send_thread') {
-        const channels = await configuredMessageChannels(interaction.guild);
-        if (!channels.length) return interaction.reply({ content: '❌ ยังไม่ได้กำหนด Channel สำหรับฟังก์ชันนี้\nตั้งค่า `MESSAGE_TARGET_CHANNEL_IDS` ใน Railway Variables เป็น Channel ID คั่นด้วยเครื่องหมายจุลภาค' });
         return interaction.showModal(sendThreadModal());
       }
       if (interaction.customId === 'update_threads') return interaction.showModal(rangeModal('update_threads_modal', 'อัปเดต Match Threads'));
@@ -1089,9 +1086,9 @@ client.on('interactionCreate', async interaction => {
         const p = pending.get(key);
         if (!p || p.mode !== 'send_thread' || Date.now() - p.createdAt > 10*60*1000) return interaction.update({ content: '⚠️ Preview หมดอายุแล้ว กรุณากดปุ่มใหม่อีกครั้ง', components: [] });
         await interaction.deferUpdate();
-        const result = await sendMessageToThreadTargets(interaction.guild, p.channelId, p.threadId, p.message);
+        const result = await sendMessageToThreadTargets(interaction.guild, p.channelIds || [], p.threadId, p.message);
         pending.delete(key);
-        const lines = [`📨 **ส่งข้อความเรียบร้อย**`, `ห้อง: <#${p.channelId}>`, `🟢 ส่งสำเร็จ: **${result.sent.length} Threads**`, `🔴 ส่งไม่สำเร็จ: **${result.failed.length} Threads**`];
+        const lines = [`📨 **ส่งข้อความเรียบร้อย**`, `ห้อง: ${result.channels.map(ch => `<#${ch.id}>`).join(', ')}`, `🟢 ส่งสำเร็จ: **${result.sent.length} Threads**`, `🔴 ส่งไม่สำเร็จ: **${result.failed.length} Threads**`];
         if (result.failed.length) lines.push('', ...result.failed.slice(0,20).map(x=>`• ${x.thread.name} — ${x.error}`));
         return interaction.editReply({ content: lines.join('\n'), components: [] });
       }
@@ -1141,10 +1138,8 @@ client.on('interactionCreate', async interaction => {
         const threadId = interaction.fields.getTextInputValue('thread_id').trim();
         if (!message) return interaction.reply({ content: '❌ ข้อความว่าง ไม่สามารถส่งได้' });
         if (threadId && !/^\d{15,25}$/.test(threadId)) return interaction.reply({ content: '❌ Thread ID ไม่ถูกต้อง กรุณาใส่ Discord Thread ID ตัวเลข หรือเว้นว่าง' });
-        const channels = await configuredMessageChannels(interaction.guild);
-        if (!channels.length) return interaction.reply({ content: '❌ ไม่พบ Channel ที่กำหนดไว้สำหรับฟังก์ชันนี้' });
-        pending.set(`send:${interaction.user.id}`, { createdAt: Date.now(), mode: 'send_thread', message, threadId, channels: channels.map(c=>c.id) });
-        return interaction.reply({ content: '📨 **ส่งข้อความเข้า Match Thread**\n\nเลือกห้องที่จะส่งข้อความ', components: [messageChannelSelect(channels)] });
+        pending.set(`send:${interaction.user.id}`, { createdAt: Date.now(), mode: 'send_thread', message, threadId });
+        return interaction.reply({ content: '📨 **ส่งข้อความเข้า Match Thread**\n\nเลือกห้องที่จะส่งข้อความได้สูงสุด **4 ห้อง**\nใช้ช่องค้นหาของ Discord เพื่อค้นหาชื่อห้องได้เลย', components: [messageChannelSelect()] });
       }
       const round=interaction.fields.getTextInputValue('round').trim();
       const range=interaction.fields.getTextInputValue('range').trim(); let start,end;
@@ -1159,20 +1154,17 @@ client.on('interactionCreate', async interaction => {
       if(mode==='delete_threads'||mode==='delete_vc')return interaction.reply({content:`⚠️ **ยืนยันการลบ**\nRound ${round}, คู่ ${start}-${end}\n\n${mode==='delete_threads'?'จะลบเฉพาะ Match Threads':'จะลบ VC + Category ที่เกี่ยวข้อง'}\n\nแน่ใจหรือไม่?`,components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`confirm_delete:${mode}:${round}:${start}:${end}`).setLabel('ยืนยัน').setStyle(ButtonStyle.Danger),new ButtonBuilder().setCustomId('cancel_delete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))]});
     }
 
-    if (interaction.isStringSelectMenu() && interaction.customId === 'send_thread_channel') {
+    if (interaction.isChannelSelectMenu() && interaction.customId === 'send_thread_channels') {
       const key = `send:${interaction.user.id}`;
       const p = pending.get(key);
       if (!p || p.mode !== 'send_thread' || Date.now() - p.createdAt > 10*60*1000) return interaction.update({ content: '⚠️ รายการหมดอายุแล้ว กดปุ่มใหม่อีกครั้ง', components: [] });
-      const channelId = interaction.values[0];
-      if (!p.channels.includes(channelId)) return interaction.update({ content: '❌ ห้องที่เลือกไม่อยู่ในรายการ Channel ที่อนุญาต', components: [] });
-      const channel = await getChannel(interaction.guild, channelId);
-      if (!channel) return interaction.update({ content: '❌ ไม่พบ Channel ที่เลือก', components: [] });
-      const threads = await fetchThreadsFromSourceRoom(channel);
-      let targets = p.threadId ? threads.filter(t => t.id === p.threadId) : threads;
-      if (p.threadId && !targets.length) return interaction.update({ content: `❌ ไม่พบ Thread ID \`${p.threadId}\` ในห้อง <#${channelId}>`, components: [] });
-      if (!p.threadId && !targets.length) return interaction.update({ content: `ℹ️ ไม่พบ Thread ในห้อง <#${channelId}>`, components: [] });
-      p.channelId = channelId; p.targetThreadIds = targets.map(t=>t.id); p.createdAt = Date.now(); pending.set(key,p);
-      return interaction.update({ content: sendThreadPreview(channel, p.threadId, p.message, targets), components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`send_thread_confirm:${interaction.user.id}`).setLabel('Confirm ส่งข้อความ').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('send_thread_cancel').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))] });
+      const channelIds = interaction.values.slice(0, 4);
+      const { channels, targets } = await fetchSendThreadTargets(interaction.guild, channelIds, p.threadId);
+      if (!channels.length) return interaction.update({ content: '❌ ไม่พบห้องที่เลือก หรือบอทไม่มีสิทธิ์เข้าถึงห้องเหล่านั้น', components: [] });
+      if (p.threadId && !targets.length) return interaction.update({ content: `❌ ไม่พบ Thread ID \`${p.threadId}\` ในห้องที่เลือก`, components: [] });
+      if (!p.threadId && !targets.length) return interaction.update({ content: `ℹ️ ไม่พบ Match Thread ใน ${channels.length} ห้องที่เลือก`, components: [] });
+      p.channelIds = channels.map(c=>c.id); p.targetThreadIds = targets.map(x=>x.thread.id); p.createdAt = Date.now(); pending.set(key,p);
+      return interaction.update({ content: sendThreadPreview(channels, p.threadId, p.message, targets), components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`send_thread_confirm:${interaction.user.id}`).setLabel('Confirm ส่งข้อความ').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('send_thread_cancel').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))] });
     }
 
     if (interaction.isChannelSelectMenu()) {
