@@ -522,13 +522,26 @@ async function findExistingThread(parent, match) {
 
 async function resolveThread(guild, match, parentId) {
   const key = matchKey(match.round, match.pair);
+  const targetParentId = String(parentId || MATCH_THREAD_PARENT_ID || '');
   const stored = db.matches[key];
+
+  // IMPORTANT: a stored Thread ID is only reusable when it belongs to the
+  // parent channel currently selected by Staff. Previously the bot returned
+  // any stored Thread, even when it lived in a different room. That made the
+  // batch report "สำเร็จ" while no Thread appeared in the selected room.
   if (stored?.threadId) {
     const existing = await guild.channels.fetch(stored.threadId).catch(() => null);
-    if (existing?.isThread?.()) return existing;
+    if (existing?.isThread?.() && String(existing.parentId) === targetParentId) {
+      return existing;
+    }
   }
-  const parent = await getChannel(guild, parentId || MATCH_THREAD_PARENT_ID);
-  if (!parent || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(parent.type)) throw new Error(`Match Thread Parent ไม่ถูกต้องสำหรับคู่ ${match.pair}`);
+
+  const parent = await getChannel(guild, targetParentId);
+  if (!parent || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(parent.type)) {
+    throw new Error(`Match Thread Parent ไม่ถูกต้องสำหรับคู่ ${match.pair}`);
+  }
+
+  // Only search inside the selected parent.
   return await findExistingThread(parent, match);
 }
 
@@ -572,6 +585,13 @@ async function ensureThread(guild, match, parentId, vc1, vc2) {
     const parent = await getChannel(guild, parentId || MATCH_THREAD_PARENT_ID);
     if (!parent || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(parent.type)) throw new Error(`Match Thread Parent ไม่ถูกต้องสำหรับคู่ ${match.pair}`);
     thread = await parent.threads.create({ name: threadName(match), autoArchiveDuration: THREAD_AUTO_ARCHIVE_MINUTES, reason: `CSV Match ${match.round}-${match.pair}` });
+
+    // Verify Discord returned a real Thread attached to the selected parent.
+    // If the parent is wrong, fail instead of reporting a false success.
+    if (!thread?.isThread?.() || String(thread.parentId) !== String(parent.id)) {
+      throw new Error(`สร้าง Thread แล้วแต่ Parent ไม่ตรงกับห้องที่เลือก (คู่ ${match.pair})`);
+    }
+
     created = true;
   }
   const welcome = WELCOME.replaceAll('{MATCH}', `${match.team1} VS ${match.team2}`).replaceAll('{ROUND}', String(match.round));
@@ -589,6 +609,12 @@ async function ensureThread(guild, match, parentId, vc1, vc2) {
   if (created || !db.matches[key]?.openIdPosted) {
     for (const content of openIdChunks([match.team1, match.team2])) await thread.send({ content });
   }
+
+  // Final guard: never return a Thread from another parent as a success.
+  if (!thread?.isThread?.() || String(thread.parentId) !== String(parentId || MATCH_THREAD_PARENT_ID)) {
+    throw new Error(`Thread ของคู่ ${match.pair} ไม่ได้อยู่ในห้องที่เลือก`);
+  }
+
   return { thread, created };
 }
 function staffBoardContent(guild, match, mapping) {

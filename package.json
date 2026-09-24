@@ -1,6 +1,6 @@
 {
   "name": "rov-svg-csv-discord-bot",
-  "version": "3.3.8",
+  "version": "3.3.16",
   "private": true,
   "description": "RoV tournament Discord bot using CSV as the primary match pipeline; no Challonge API calls.",
   "main": "src/index.js",
