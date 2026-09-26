@@ -26,7 +26,7 @@ For compatibility, `team_a/team_b` are also accepted. `challonge_match_id` is ba
 
 - Challonge A only
 - Tournament URL: `https://challonge.com/1gv5vasi`
-- CSV: `data/round512.csv`
+- CSV: `data/round256.csv`
 - Open ID: `data/approved-teams-openid-cleaned.csv`
 
 ## Panel
@@ -279,7 +279,7 @@ Recommended:
 
 ```text
 🔍 ตรวจสอบ Team VC
-Round: 512
+Round: 256
 Range: 1-1
 ```
 
@@ -318,7 +318,7 @@ Check Category, both VC permissions, Thread, VC links, Open ID, Staff Board, and
 1. Replace the project files with this version and push to the GitHub repository connected to Railway.
 2. Keep the existing Railway service and existing Volume mounted at `/data`.
 3. In Railway Variables set: `DISCORD_TOKEN`, `CLIENT_ID`, `GUILD_ID`, `ROSTER_CHANNEL_ID`, and `ALLOWED_USER_IDS`.
-4. Keep `MATCH_CSV_PATH=./data/round512.csv`, `OPENID_CSV_PATH=./data/approved-teams-openid-cleaned.csv`, and `DB_PATH=/data/rov-csv-bot.json` unless your deployment uses different paths.
+4. Keep `MATCH_CSV_PATH=./data/round256.csv`, `OPENID_CSV_PATH=./data/approved-teams-openid-cleaned.csv`, and `DB_PATH=/data/rov-csv-bot.json` unless your deployment uses different paths.
 5. `ALLOWED_ROLE_IDS` is no longer used. Remove it if present.
 6. Commit/push. Railway will redeploy with `npm start`.
 7. After deploy, run `/panel` in the configured Staff channel (if `STAFF_CHANNEL_ID` is set). Everyone can see the Panel, but only listed User IDs can operate it.

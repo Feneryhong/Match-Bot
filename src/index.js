@@ -20,11 +20,11 @@ const ROSTER_CHANNEL_ID = env.ROSTER_CHANNEL_ID || '';
 const MATCH_THREAD_PARENT_ID = env.MATCH_THREAD_PARENT_ID || '';
 const STAFF_BOARD_CHANNEL_ID = env.STAFF_BOARD_CHANNEL_ID || '';
 const DB_PATH = env.DB_PATH || '/data/rov-csv-bot.json';
-const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 'round512.csv');
+const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 'round256.csv');
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
-const BUILD_ID = 'v3.3.13-R512-SEND-THREAD-MODAL';
+const BUILD_ID = 'v3.3.17-R256-CSV-SEND-THREAD-MODAL';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -522,26 +522,13 @@ async function findExistingThread(parent, match) {
 
 async function resolveThread(guild, match, parentId) {
   const key = matchKey(match.round, match.pair);
-  const targetParentId = String(parentId || MATCH_THREAD_PARENT_ID || '');
   const stored = db.matches[key];
-
-  // IMPORTANT: a stored Thread ID is only reusable when it belongs to the
-  // parent channel currently selected by Staff. Previously the bot returned
-  // any stored Thread, even when it lived in a different room. That made the
-  // batch report "สำเร็จ" while no Thread appeared in the selected room.
   if (stored?.threadId) {
     const existing = await guild.channels.fetch(stored.threadId).catch(() => null);
-    if (existing?.isThread?.() && String(existing.parentId) === targetParentId) {
-      return existing;
-    }
+    if (existing?.isThread?.()) return existing;
   }
-
-  const parent = await getChannel(guild, targetParentId);
-  if (!parent || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(parent.type)) {
-    throw new Error(`Match Thread Parent ไม่ถูกต้องสำหรับคู่ ${match.pair}`);
-  }
-
-  // Only search inside the selected parent.
+  const parent = await getChannel(guild, parentId || MATCH_THREAD_PARENT_ID);
+  if (!parent || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(parent.type)) throw new Error(`Match Thread Parent ไม่ถูกต้องสำหรับคู่ ${match.pair}`);
   return await findExistingThread(parent, match);
 }
 
@@ -585,13 +572,6 @@ async function ensureThread(guild, match, parentId, vc1, vc2) {
     const parent = await getChannel(guild, parentId || MATCH_THREAD_PARENT_ID);
     if (!parent || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(parent.type)) throw new Error(`Match Thread Parent ไม่ถูกต้องสำหรับคู่ ${match.pair}`);
     thread = await parent.threads.create({ name: threadName(match), autoArchiveDuration: THREAD_AUTO_ARCHIVE_MINUTES, reason: `CSV Match ${match.round}-${match.pair}` });
-
-    // Verify Discord returned a real Thread attached to the selected parent.
-    // If the parent is wrong, fail instead of reporting a false success.
-    if (!thread?.isThread?.() || String(thread.parentId) !== String(parent.id)) {
-      throw new Error(`สร้าง Thread แล้วแต่ Parent ไม่ตรงกับห้องที่เลือก (คู่ ${match.pair})`);
-    }
-
     created = true;
   }
   const welcome = WELCOME.replaceAll('{MATCH}', `${match.team1} VS ${match.team2}`).replaceAll('{ROUND}', String(match.round));
@@ -609,12 +589,6 @@ async function ensureThread(guild, match, parentId, vc1, vc2) {
   if (created || !db.matches[key]?.openIdPosted) {
     for (const content of openIdChunks([match.team1, match.team2])) await thread.send({ content });
   }
-
-  // Final guard: never return a Thread from another parent as a success.
-  if (!thread?.isThread?.() || String(thread.parentId) !== String(parentId || MATCH_THREAD_PARENT_ID)) {
-    throw new Error(`Thread ของคู่ ${match.pair} ไม่ได้อยู่ในห้องที่เลือก`);
-  }
-
   return { thread, created };
 }
 function staffBoardContent(guild, match, mapping) {
@@ -960,7 +934,7 @@ function parseRange(value) {
 function rangeModal(customId, title) {
   const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
   modal.addComponents(
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('round').setLabel('รอบ เช่น 512').setStyle(TextInputStyle.Short).setValue('512').setRequired(true)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('round').setLabel('รอบ เช่น 256').setStyle(TextInputStyle.Short).setValue('256').setRequired(true)),
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('range').setLabel('เรนจ์ เช่น 1-32 หรือ 1-1').setStyle(TextInputStyle.Short).setPlaceholder('1-32 = คู่ 1 ถึง 32 | 1-1 = คู่เดียว').setRequired(true))
   );
   return modal;
