@@ -24,7 +24,7 @@ const MATCH_CSV_PATH = env.MATCH_CSV_PATH || path.join(__dirname, '..', 'data', 
 const OPENID_CSV_PATH = env.OPENID_CSV_PATH || path.join(__dirname, '..', 'data', 'approved-teams-openid-cleaned.csv');
 const CATEGORY_PREFIX = env.CATEGORY_PREFIX_A || 'CA';
 const TOURNAMENT_NAME = env.TOURNAMENT_A_NAME || 'Challonge A';
-const BUILD_ID = 'v3.3.17-R256-CSV-SEND-THREAD-MODAL';
+const BUILD_ID = 'v3.3.18-R256-CSV-DELETE-CATEGORY-VC';
 const THREAD_AUTO_ARCHIVE_MINUTES = Number(env.THREAD_AUTO_ARCHIVE_MINUTES || 10080);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN / CLIENT_ID / GUILD_ID');
@@ -1014,6 +1014,25 @@ function sendThreadPreview(channels, threadId, message, targets) {
   return lines.join('\n');
 }
 
+async function deleteVoiceChannelsInCategory(guild, categoryId) {
+  const category = await guild.channels.fetch(categoryId).catch(() => null);
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    throw new Error(`ไม่พบ Category หรือ ID นี้ไม่ใช่ Category: ${categoryId}`);
+  }
+  const voices = guild.channels.cache.filter(c => c.parentId === category.id && c.type === ChannelType.GuildVoice);
+  let deleted = 0;
+  const failed = [];
+  for (const vc of voices.values()) {
+    try {
+      await vc.delete(`Delete Team VC in Category ${category.id}`);
+      deleted++;
+    } catch (e) {
+      failed.push(`${vc.name} (${vc.id})`);
+    }
+  }
+  return { category, total: voices.size, deleted, failed };
+}
+
 function panel() {
   return {
     content: `🏆 **RoV Tournament CSV Pipeline — ${TOURNAMENT_NAME}**\n**Build:** ${BUILD_ID}\n\n**Source:** CSV\n**Challonge API:** ปิด\n**Roster:** <#${ROSTER_CHANNEL_ID}> (ใช้ข้อความล่าสุดของแต่ละทีมเท่านั้น)\n**Announcement:** เลือกห้องทุกครั้งที่กดประกาศ
@@ -1033,7 +1052,8 @@ function panel() {
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('delete_threads').setLabel('🗑️ ลบ Threads ตามช่วง').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('delete_vc').setLabel('🗑️ ลบ VC + Category ตามช่วง').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId('delete_vc').setLabel('🗑️ ลบ VC + Category ตามช่วง').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('delete_category_vc').setLabel('🗑️ ลบ VC ใน Category').setStyle(ButtonStyle.Danger)
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('status').setLabel('📊 ตรวจสอบสถานะ').setStyle(ButtonStyle.Secondary),
@@ -1076,6 +1096,11 @@ client.on('interactionCreate', async interaction => {
       if (interaction.customId === 'update_threads') return interaction.showModal(rangeModal('update_threads_modal', 'อัปเดต Match Threads'));
       if (interaction.customId === 'delete_threads') return interaction.showModal(rangeModal('delete_threads_modal', 'ลบ Threads ตามช่วง'));
       if (interaction.customId === 'delete_vc') return interaction.showModal(rangeModal('delete_vc_modal', 'ลบ VC + Category ตามช่วง'));
+      if (interaction.customId === 'delete_category_vc') {
+        const modal = new ModalBuilder().setCustomId('delete_category_vc_modal').setTitle('ลบ VC ใน Category');
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('category_id').setLabel('Category ID').setPlaceholder('เช่น 123456789012345678').setStyle(TextInputStyle.Short).setRequired(true)));
+        return interaction.showModal(modal);
+      }
       if (interaction.customId === 'audit_vc') return interaction.showModal(rangeModal('audit_vc_modal', 'ตรวจสอบ Team VC'));
       if (interaction.customId === 'link_match' || interaction.customId === 'thread_links') {
         return interaction.reply({ content: '🔗 **สร้าง Link Match**\nเลือก Source Room ที่มี Match Threads อยู่จริง\n\nบอทจะสแกน Thread ที่มีอยู่ → ตรวจชื่อ `Team 1 vs Team 2` → หา VC ของทั้งสองทีม → แล้วให้เลือกห้องปลายทางสำหรับส่งลิงก์', components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('link_source').setPlaceholder('เลือก Source Room').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))] });
@@ -1118,6 +1143,12 @@ client.on('interactionCreate', async interaction => {
         pending.delete(key);
         return interaction.update({ content: `📢 **ประกาศเสร็จแล้ว**\nห้อง: <#${p.channelId}>\nส่ง: **${sent.sent.length} กลุ่มเวลา**\n🟢 ประกาศเฉพาะ ${report.found.length} คู่ที่มี Thread`, components: [] });
       }
+      if (interaction.customId.startsWith('confirm_delete_category_vc:')) {
+        const categoryId = interaction.customId.slice('confirm_delete_category_vc:'.length);
+        const result = await deleteVoiceChannelsInCategory(interaction.guild, categoryId);
+        const failedText = result.failed.length ? `\n\n🔴 ลบไม่สำเร็จ:\n${result.failed.map(x => `• ${x}`).join('\n')}` : '';
+        return interaction.update({content:`🗑️ **ลบ VC เสร็จแล้ว**\n\nCategory: <#${result.category.id}>\nลบสำเร็จ: **${result.deleted}/${result.total} ห้อง**${failedText}`,components:[]});
+      }
       if (interaction.customId.startsWith('confirm_delete:')) {
         const [, mode, round, start, end] = interaction.customId.split(':');
         const rows = getMatches(round, Number(start), Number(end)); let count = 0;
@@ -1140,6 +1171,14 @@ client.on('interactionCreate', async interaction => {
         if (threadId && !/^\d{15,25}$/.test(threadId)) return interaction.reply({ content: '❌ Thread ID ไม่ถูกต้อง กรุณาใส่ Discord Thread ID ตัวเลข หรือเว้นว่าง' });
         pending.set(`send:${interaction.user.id}`, { createdAt: Date.now(), mode: 'send_thread', message, threadId });
         return interaction.reply({ content: '📨 **ส่งข้อความเข้า Match Thread**\n\nเลือกห้องที่จะส่งข้อความได้สูงสุด **4 ห้อง**\nใช้ช่องค้นหาของ Discord เพื่อค้นหาชื่อห้องได้เลย', components: [messageChannelSelect()] });
+      }
+      if (custom === 'delete_category_vc_modal') {
+        const categoryId = interaction.fields.getTextInputValue('category_id').trim();
+        if (!/^\d{15,25}$/.test(categoryId)) return interaction.reply({content:'❌ Category ID ไม่ถูกต้อง กรุณาใส่ Discord Category ID ตัวเลข'});
+        const category = await interaction.guild.channels.fetch(categoryId).catch(() => null);
+        if (!category || category.type !== ChannelType.GuildCategory) return interaction.reply({content:`❌ ไม่พบ Category หรือ ID นี้ไม่ใช่ Category: \`${categoryId}\``});
+        const voices = interaction.guild.channels.cache.filter(c => c.parentId === category.id && c.type === ChannelType.GuildVoice);
+        return interaction.reply({content:`⚠️ **ยืนยันการลบ VC ใน Category**\n\nCategory: <#${category.id}>\nCategory ID: \`${category.id}\`\nพบ Voice Channels: **${voices.size} ห้อง**\n\nการทำงานนี้จะ **ลบเฉพาะ VC ที่อยู่ใน Category นี้** และจะไม่ลบ Category`,components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`confirm_delete_category_vc:${category.id}`).setLabel('ยืนยันลบ VC').setStyle(ButtonStyle.Danger),new ButtonBuilder().setCustomId('cancel_delete').setLabel('ยกเลิก').setStyle(ButtonStyle.Secondary))]});
       }
       const round=interaction.fields.getTextInputValue('round').trim();
       const range=interaction.fields.getTextInputValue('range').trim(); let start,end;
