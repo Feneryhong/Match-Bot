@@ -934,7 +934,7 @@ function parseRange(value) {
 function rangeModal(customId, title) {
   const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
   modal.addComponents(
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('round').setLabel('รอบ เช่น 256').setStyle(TextInputStyle.Short).setValue('256').setRequired(true)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('round').setLabel('รอบ เช่น 256').setStyle(TextInputStyle.Short).setValue('128').setRequired(true)),
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('range').setLabel('เรนจ์ เช่น 1-32 หรือ 1-1').setStyle(TextInputStyle.Short).setPlaceholder('1-32 = คู่ 1 ถึง 32 | 1-1 = คู่เดียว').setRequired(true))
   );
   return modal;
