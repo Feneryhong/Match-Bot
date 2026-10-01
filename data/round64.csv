@@ -1,33 +1,33 @@
-﻿Match,Bracket,Round,Date,Time,Team 1,Team 2,Format,Platform
-1,A,64,2 ตุลาคม 2569,19:00,ꜰᴀᴇʟᴏʀɪᴀ,NAIAD CHILL,Best of 3,Online
-2,A,64,2 ตุลาคม 2569,19:00,KUROBUTA PREMiUM,กลอ ไก่,Best of 3,Online
-3,A,64,2 ตุลาคม 2569,19:00,ZORINA,SuperShine,Best of 3,Online
-4,A,64,2 ตุลาคม 2569,19:00,bunnygawa,หมูแคระ ( Moo Krae ),Best of 3,Online
-5,A,64,2 ตุลาคม 2569,19:00,กินไก่แถวหอไอเฟล,SIGMA GIRL,Best of 3,Online
-6,A,64,2 ตุลาคม 2569,19:00,All for Aom,Nuggets,Best of 3,Online
-7,A,64,2 ตุลาคม 2569,19:00,ลาก่อนแครี่ของผม,Saohai e-sports,Best of 3,Online
-8,A,64,2 ตุลาคม 2569,19:00,ชาวนากับงูเห่า.,Magic Friends​ V2​,Best of 3,Online
-9,A,64,2 ตุลาคม 2569,19:00,HEXA,RJ รีบจบรีบไปนอน,Best of 3,Online
-10,A,64,2 ตุลาคม 2569,19:00,Breakout star,ปลาปักเป้ามาเอาปอง,Best of 3,Online
-11,A,64,2 ตุลาคม 2569,19:00,QUEEN TIMES,PWG,Best of 3,Online
-12,A,64,2 ตุลาคม 2569,20:00,Honey Toast,RENAXIS,Best of 3,Online
-13,A,64,2 ตุลาคม 2569,20:00,Aftershock,พีสะเดิดเปิดพัสดุ,Best of 3,Online
-14,A,64,2 ตุลาคม 2569,20:00,HIVE,Baddiez E-Sports,Best of 3,Online
-15,A,64,2 ตุลาคม 2569,20:00,BBbunny,The Angry Crew,Best of 3,Online
-16,A,64,2 ตุลาคม 2569,20:00,Barbie girl,VIXÉN,Best of 3,Online
-17,B,64,2 ตุลาคม 2569,20:00,NB E-SPORT,BLACK CAT,Best of 3,Online
-18,B,64,2 ตุลาคม 2569,20:00,Cherish Ladies,VELVORTHAR TEAM,Best of 3,Online
-19,B,64,2 ตุลาคม 2569,20:00,Visienda,Star Dream Esports,Best of 3,Online
-20,B,64,2 ตุลาคม 2569,20:00,LUMÉRA,ØNYX,Best of 3,Online
-21,B,64,2 ตุลาคม 2569,20:00,KKU eSports,Underdog Aurora,Best of 3,Online
-22,B,64,2 ตุลาคม 2569,20:00,Ren,MYST ESPORTS,Best of 3,Online
-23,B,64,2 ตุลาคม 2569,21:00,อดีตเบต้าเทสเตอร์,VBAC x LYNX ESPORTS,Best of 3,Online
-24,B,64,2 ตุลาคม 2569,21:00,LZY,mrWHY?,Best of 3,Online
-25,B,64,2 ตุลาคม 2569,21:00,Crimson Girl Esports,i miss u saurus,Best of 3,Online
-26,B,64,2 ตุลาคม 2569,21:00,Hello Pudding,Madmamas,Best of 3,Online
-27,B,64,2 ตุลาคม 2569,21:00,xforce.maedooyou,Team Mazz,Best of 3,Online
-28,B,64,2 ตุลาคม 2569,21:00,Friend Zone Miss Esport,NYVERA,Best of 3,Online
-29,B,64,2 ตุลาคม 2569,21:00,GLORY E-SPORTS,Chonburi Esports,Best of 3,Online
-30,B,64,2 ตุลาคม 2569,21:00,PHANTOM CATS,My Good Boy X ETC,Best of 3,Online
-31,B,64,2 ตุลาคม 2569,21:00,SONICGOT E-SPORTS,ETC x DIVA,Best of 3,Online
-32,B,64,2 ตุลาคม 2569,21:00,Noxia,Melomeow,Best of 3,Online
+﻿round,pair,team_a,team_b,challonge_match_id,time,date,side
+64,1,ꜰᴀᴇʟᴏʀɪᴀ,NAIAD CHILL,473179766,19:00,2026-10-02,A
+64,2,KUROBUTA PREMiUM,กลอ ไก่,473179767,19:00,2026-10-02,A
+64,3,ZORINA,SuperShine,473179768,19:00,2026-10-02,A
+64,4,bunnygawa,หมูแคระ ( Moo Krae ),473179769,19:00,2026-10-02,A
+64,5,กินไก่แถวหอไอเฟล,SIGMA GIRL,473179770,19:00,2026-10-02,A
+64,6,All for Aom,Nuggets,473179771,19:00,2026-10-02,A
+64,7,ลาก่อนแครี่ของผม,Saohai e-sports,473179772,19:00,2026-10-02,A
+64,8,ชาวนากับงูเห่า.,Magic Friends​ V2​,473179773,19:00,2026-10-02,A
+64,9,HEXA,RJ รีบจบรีบไปนอน,473179774,19:00,2026-10-02,A
+64,10,Breakout star,ปลาปักเป้ามาเอาปอง,473179775,19:00,2026-10-02,A
+64,11,QUEEN TIMES,PWG,473179776,19:00,2026-10-02,A
+64,12,Honey Toast,RENAXIS,473179777,20:00,2026-10-02,A
+64,13,Aftershock,พีสะเดิดเปิดพัสดุ,473179778,20:00,2026-10-02,A
+64,14,HIVE,Baddiez E-Sports,473179779,20:00,2026-10-02,A
+64,15,BBbunny,The Angry Crew,473179780,20:00,2026-10-02,A
+64,16,Barbie girl,VIXÉN,473179781,20:00,2026-10-02,A
+64,17,NB E-SPORT,BLACK CAT,473179464,20:00,2026-10-02,B
+64,18,Cherish Ladies,VELVORTHAR TEAM,473179465,20:00,2026-10-02,B
+64,19,Visienda,Star Dream Esports,473179466,20:00,2026-10-02,B
+64,20,LUMÉRA,ØNYX,473179467,20:00,2026-10-02,B
+64,21,KKU eSports,Underdog Aurora,473179468,20:00,2026-10-02,B
+64,22,Ren,MYST ESPORTS,473179469,20:00,2026-10-02,B
+64,23,อดีตเบต้าเทสเตอร์,VBAC x LYNX ESPORTS,473179470,21:00,2026-10-02,B
+64,24,LZY,mrWHY?,473179471,21:00,2026-10-02,B
+64,25,Crimson Girl Esports,i miss u saurus,473179472,21:00,2026-10-02,B
+64,26,Hello Pudding,Madmamas,473179473,21:00,2026-10-02,B
+64,27,xforce.maedooyou,Team Mazz,473179474,21:00,2026-10-02,B
+64,28,Friend Zone Miss Esport,NYVERA,473179475,21:00,2026-10-02,B
+64,29,GLORY E-SPORTS,Chonburi Esports,473179476,21:00,2026-10-02,B
+64,30,PHANTOM CATS,My Good Boy X ETC,473179477,21:00,2026-10-02,B
+64,31,SONICGOT E-SPORTS,ETC x DIVA,473179478,21:00,2026-10-02,B
+64,32,Noxia,Melomeow,473179479,21:00,2026-10-02,B
